@@ -170,7 +170,7 @@ declare -A tArgSwitches
 # All arguments, that ar no switeches are stored inside the hashtable tUnnamedArguments.
 # If a switch is set alone, it is set to 1 (true)
 # otherwise the first param following the switch is set to it's value.
-setArgumentsFromUser() {
+setArgumentsFromCommandLine() {
     local nElements=${#tCommandLineArguments[@]}
     local nCurElement=0
     while [ "$nCurElement" -lt "$nElements" ];
@@ -193,7 +193,7 @@ setArgumentsFromUser() {
 }
 
 # Default operation - parse the arguments from user
-setArgumentsFromUser
+setArgumentsFromCommandLine
 
 ## Set the remaining unnamed arguments so they can be processed by the program
 ## To avoid this, set LS_KEEP_ARGUMENTS="true"
@@ -201,5 +201,4 @@ if  $(! isTrueString "$LS_KEEP_ARGUMENTS" );
 then 
     set -- "${tUnnamedArguments[@]}"
 fi 
-
 

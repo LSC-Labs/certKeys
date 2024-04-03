@@ -9,7 +9,7 @@
 # **************************************************************
 Prog_Version=0.1
 
-source "LScriptLibV1.sh"
+source "$(dirname $0)/LScriptLibV1.sh"
 
 _initialize() {
     Prog_Name="Key/Cert Helper"
@@ -18,13 +18,16 @@ _initialize() {
     echo "============================================="
 
     strCommand=${1:-"help"}
-    strAliasName=$(    getArgumentSwitchValue  "alias"          "" )
-    strTargetName=$(   getArgumentSwitchValue  "target"            )
-    strKeyAlgorithm=$( getArgumentSwitchValue  "algorithm"   "rsa" | tr '[:upper:]' '[:lower:]')
-    strKeyBitLength=$( getArgumentSwitchValue  "keybits"    "2048" )
-    bSetAsDefaultKey=$( getArgumentSwitchValue "default"   "false" )
-    bForce=$(           getArgumentSwitchValue "force"         "0" )
+    strAliasName=$(    getArgumentSwitchValue  "alias"          ""     )
+    strTargetName=$(   getArgumentSwitchValue  "target"                )
+    strKeyAlgorithm=$( getArgumentSwitchValue  "algorithm"   "rsa"     | tr '[:upper:]' '[:lower:]')
+    strKeyBitLength=$( getArgumentSwitchValue  "keybits"    "2048"     )
+    bSetAsDefaultKey=$( getArgumentSwitchValue "default"   "false"     )
+    bForce=$(           getArgumentSwitchValue "force"         "0"     )
     if $(isTrueString "$bForce" ); then bForce="1"; else bForce="0"; fi
+    # Get the context - if a single switch - it is set to 1 - so ignore
+    strContextName=$(  getArgumentSwitchValue  "context" ${HOSTNAME@L} )
+    [[ ${strContextName} = "1" ]] && strContextName=""
 
     # Define some needed infos for the Key Locations
     # local strArgument="${strArlogrythm:-"RSA"}"
@@ -37,7 +40,7 @@ _initialize() {
     if $(isTrueString $bSetAsDefaultKey); then
         PrivateKeyFileName=${DefaultPrivateKeyFileName}
     else 
-        PrivateKeyFileName="id@${HOSTNAME@L}_${strKeyAlgorithm@L}"
+        PrivateKeyFileName="id@${strContextName}_${strKeyAlgorithm@L}"
     fi
     PublicKeyFileName_PEM="${PrivateKeyFileName}.pub.pem"
     PublicKeyFileName_SSH="${PrivateKeyFileName}.pub"
@@ -285,7 +288,7 @@ funcCreateConfigEntry() {
     fi
     echo "Host $strHostEntry">>"${strConfigFile}"
     echo "     HostName      $strTargetHostAddress">>"${strConfigFile}"
-    echo "     IdentityFile  $PrivateKeyFile">>"${strConfigFile}"
+    echo "     IdentityFile  ~/.ssh/$PrivateKeyFileName">>"${strConfigFile}"
     [[ "${strUserID}" != "" ]] && echo "     User          $strUserID">>"${strConfigFile}"
     echo "" >>"${strConfigFile}"
 }
@@ -444,14 +447,32 @@ funcSyncKeysFromWindows() {
 
 
 funcShowHelp() {
+
+    echo "Usage:"
+    echo "------"
+    echo "certKeys \<Command\> [-force] [-default] [-context] [-algorithm] [-target] [-alias]"
+    echo ""
+    echo "Switches:  *=are global switches"
+    echo "--------------------------------"
+    echo " -force       *[1|0]  \"$(getArgumentSwitchValue "force" "0"   )\"   : replace the key/entry without asking." 
+    echo ""
+    echo " -default     *[1|0]  \"$(getArgumentSwitchValue "default" "0" )\"   : use the default key/entry." 
+    echo "                             Keys will use the default naming convention."
+    echo ""
+    echo " -context   *[string] \"$(getArgumentSwitchValue "context" "${HOSTNAME}" )\"   : key context." 
+    echo "                             If set, the key has the format \"id@<context>_rsa\"."
+    echo "                             Default (1) - the name of the computer\"."
+    echo ""
+    echo " -target     [string]  \"$(getArgumentSwitchValue "target" "" )\"   : target of the operation." 
+    echo ""
+    echo " -alias      [string]  \"$(getArgumentSwitchValue "alias" "" )\"   : alias for config entries." 
     echo ""
     echo "Possible commands are:"
     echo "----------------------"
-    echo "  createKeys       : Creates a specific key pair for the user on this computer."
+    echo "  createKeys   : Creates a specific key pair for the user on this computer."
     echo "                 The key is stored in ~/.ssh with the name \"${PrivateKeyFileName}\"."
     echo "                 If the key already exists, you will be prompted to use the -force param or to generate it know."
     echo "                 Also the public keys for PEM and SSH will be generated."
-    echo "      -force     If an already existing key should be replaced, use this switch."
     echo ""
     echo "  createPublicKeys : Creates new public keys in format PEM and SSH"
     echo "                 If you lost the public keys, you can regenerate them with this call."
@@ -460,7 +481,7 @@ funcShowHelp() {
     echo ""
     echo "  getPublicSSHKey : Copies the public SSH key."
     echo "                 The key is stored in the current location, or as defined in -target."
-    echo "      -target    If defined, the target location, where the key should be stored."
+    echo "      -target    specify the location, where the key should be stored. Default is the current directory."
     echo ""
     echo "  makeKeyAsDefault : Copy this key to the default key for ssh."
     echo "                 Make the key \"${PrivateKeyFileName}\" also as your default key."
@@ -485,7 +506,7 @@ funcShowHelp() {
     echo "      -alias     The alias name in the config file."
     echo "                 If not specified, the hostname part of the -target switch will be used.."           
     echo ""
-    echo "  showConfig     : Shows the current config file (easy access)."
+    echo "  showConfig   : Shows the current config file (easy access)."
     echo ""
     echo "  syncKeysToWindows : Synchronise the local ssh keys and settings to windows."
     echo "                 All local keys and the config will be copied to the windows .ssh path of the current user."

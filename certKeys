@@ -1,0 +1,554 @@
+#!/usr/bin/bash
+# CERT Module to create keys and certificates on this machine
+# see also : 
+# https://www.heise.de/select/ct/2024/2/2334213182462573303
+# ct.de/y55f
+# Paramters
+#    1  == Command
+# 
+# **************************************************************
+Prog_Version=0.1
+
+source "LScriptLibV1.sh"
+
+_initialize() {
+    Prog_Name="Key/Cert Helper"
+    Prog_Copy="2024 - LSC Labs"
+    echo "${Prog_Name} Ver.:${Prog_Version} (c) ${Prog_Copy}"
+    echo "============================================="
+
+    strCommand=${1:-"help"}
+    strAliasName=$(    getArgumentSwitchValue  "alias"          "" )
+    strTargetName=$(   getArgumentSwitchValue  "target"            )
+    strKeyAlgorithm=$( getArgumentSwitchValue  "algorithm"   "rsa" | tr '[:upper:]' '[:lower:]')
+    strKeyBitLength=$( getArgumentSwitchValue  "keybits"    "2048" )
+    bSetAsDefaultKey=$( getArgumentSwitchValue "default"   "false" )
+    bForce=$(           getArgumentSwitchValue "force"         "0" )
+    if $(isTrueString "$bForce" ); then bForce="1"; else bForce="0"; fi
+
+    # Define some needed infos for the Key Locations
+    # local strArgument="${strArlogrythm:-"RSA"}"
+    # strKeyAlgorythm="${strAlgorythm@L}"
+    KeyLocation="${HOME}/.ssh"
+    DefaultPrivateKeyFileName="id_${strKeyAlgorithm@L}"
+    DefaultPublicKeyFileName_PEM="${DefaultPrivateKeyFileName}.pub.pem"
+    DefaultPublicKeyFileName_SSH="${DefaultPrivateKeyFileName}.pub"
+
+    if $(isTrueString $bSetAsDefaultKey); then
+        PrivateKeyFileName=${DefaultPrivateKeyFileName}
+    else 
+        PrivateKeyFileName="id@${HOSTNAME@L}_${strKeyAlgorithm@L}"
+    fi
+    PublicKeyFileName_PEM="${PrivateKeyFileName}.pub.pem"
+    PublicKeyFileName_SSH="${PrivateKeyFileName}.pub"
+
+    PrivateKeyFile="${KeyLocation}/${PrivateKeyFileName}"
+    PublicKeyFile_PEM="${KeyLocation}/${PublicKeyFileName_PEM}"
+    PublicKeyFile_SSH="${KeyLocation}/${PublicKeyFileName_SSH}"
+
+
+    DefaultPrivateKeyFile="${KeyLocation}/${DefaultPrivateKeyFileName}"
+    DefaultPublicKeyFile_PEM="${KeyLocation}/${DefaultPublicKeyFileName_PEM}"
+    DefaultPublicKeyFile_SSH="${KeyLocation}/${DefaultPublicKeyFileName_SSH}"
+
+}
+
+# Write a common action title, so all output looks unique
+writeActionTitle() {
+    echo -e "\n** ${1}"
+    echo "------------------------------------------------------------------"
+}
+
+_createKeyLocation() {
+    if [ ! -d "${KeyLocation}" ]; then
+        echo "   ... generating ssh key location at : ${KeyLocation}" 
+        mkdir -p "${KeyLocation}"
+        chmod 700 "${KeyLocation}"
+    fi
+}
+
+# Generate the private key and create the .ssh directory with the correct
+# access rights if it does not exist.
+# An existing private key will be overwritten, so ensure what you are doing.
+_generatePrivateKey() {
+    writeActionTitle "creating private key with ${strKeyAlgorythm} to ${PrivateKeyFile} with ${strKeyBitLength} bits."
+    _createKeyLocation
+
+    trace "Calling: genpkey -algorithm ${strKeyAlgorithm@U} -pkeyopt rsa_keygen_bits:2048 -out ${PrivateKeyFile}"
+    openssl genpkey -algorithm ${strKeyAlgorithm@U} -pkeyopt rsa_keygen_bits:2048 -out "${PrivateKeyFile}"
+    chmod 600 "${PrivateKeyFile}"
+}
+
+# Generate the public keys for PEM containers and for SSH actions
+# If no private key is in place, the user will be asked to generate one.
+_generatePublicKeys() {
+    if [! -e "${PrivateKeyFile}" ]; then
+        local strYN="N"
+        read -n 1 -p "... private key does not exist. Do you want to create now? [N/y] " strYN;
+        echo # - Insert a new line..
+        # if the answer is yes... recursive call yourself.
+        if [ "${strYN@L}" == "y" ]; then
+            bForce="1"
+            _generatePrivateKey $*
+        fi
+    fi
+    if [ -e "${PrivateKeyFile}" ]; then
+        writeActionTitle "generating public key (PEM) to ${PublicKeyFile_PEM}"
+        openssl pkey -in "${PrivateKeyFile}" -pubout -out "${PublicKeyFile_PEM}"    
+        
+        writeActionTitle "generating public key (SSH) to ${PublicKeyFile_SSH}"
+        ssh-keygen -y -f "${PrivateKeyFile}" > "${PublicKeyFile_SSH}" 
+    else
+        echo "[E] missing private key at ${PrivateKeyFile}"  
+    fi 
+}
+
+_generateKeyPairs() {
+    _generatePrivateKey $*
+    _generatePublicKeys $*
+}
+
+# if the current key is not the default key, copy the key to
+# the default key location
+_makeCurrentKeysAsDefault() {
+    if [ "${PrivateKeyFile}"  != "${DefaultPrivateKeyFile}" ]; then
+        trace "copy ${PrivateKeyFile}          to ${DefaultPrivateKeyFile}"
+        cp "${PrivateKeyFile}"      "${DefaultPrivateKeyFile}"
+        trace "copy ${PublicKeyFile_SSH}      to ${DefaultPublicKeyFile_SSH}"
+        cp "${PublicKeyFile_SSH}"   "${DefaultPublicKeyFile_SSH}"
+        trace "copy ${PublicKeyFile_PEM}  to ${DefaultPublicKeyFile_PEM}"
+        cp "${PublicKeyFile_PEM}"   "${DefaultPublicKeyFile_PEM}"
+    else
+        echo "_makeCurrentKeysAsDefault() - no action, cause ${PrivateKeyFile} and ${DefaultPrivateKeyFile} are the same"
+    fi
+}
+
+_getAliasName() {
+    local strTargetName="${1:-$strTargetName}"
+    local strResult=$strAliasName
+    if [ "${strResult}" == "" ]; then
+        local strHostName=$(stringAfter "${strTargetName}" "@" "${strTargetName}" )
+        local strResult=$(stringBefore "${strHostName}" "." )
+        if [[ "$strHostName" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]];
+            then strResult="${strHostName}";
+        fi
+    fi
+    echo "${strResult}"
+}
+
+_hasConfigEntry() {
+    local strConfigFile=$1
+    local strAlias=$2
+    local nLines=$(grep -c "^Host\s*${strAlias}\s*$" "${strConfigFile}")
+    if [ $nLines == 0 ]; 
+        then false
+        else true
+    fi
+}
+
+
+_removeConfigEntry() {
+    local strConfigFile=$1
+    local strAlias=$2
+    local strTokenLine="##### ##### ##### Delimiter Token for removeConfigEntry ##### #####"
+    if [ ! "$strAlias" == "" ] && [ -e "$strConfigFile" ]; then
+        ## Insert a delimiter for identification
+        trace "inserting delims into config file $strConfigFile"
+        sed -i -e "/^Host/i${strTokenLine}" "$strConfigFile"
+        ## Remove the entries matching...
+        trace "removing entry \"Host ${strAlias}\""
+        sed -i -e "/^Host\s*${strAlias}\s*$/,/${strTokenLine}/d" "$strConfigFile"
+        ## Remove the delimiters
+        trace "removing delims from config file"
+        sed -i -e "/${strTokenLine}/d" "$strConfigFile"
+    else 
+        if [ -e "$strConfigFile" ]; 
+            then echo "[E] please specify a config file...";
+            else echo "[E] please specify an alias to be removed from the config file...";
+        fi
+    fi
+}
+
+
+# Function to create the public/private key for the user@hostname
+funcCreateKeys() {
+    if [ "${bForce:-0}" == "0" ]  && [ -e "${PrivateKeyFile}" ]; then
+        echo "[W] Keyfile ${PrivateKeyFile} already exists."
+        echo "    Either use the parameter -force to override, or override now..."
+        local strYN=$(readKey "... do you want to override the existing key ? [Y/n] " "Y" "[YNyn]")
+        # read -n 1 -p "... do you want to override the existing key ? [N/y] " strYN;
+        echo # - Insert a new line..
+        # if the answer is yes... recursive call yourself.
+        if [ "${strYN@U}" == "Y" ]; then
+            bForce="1"
+        fi
+    fi
+
+    # When bForce = 1, or keyfile does not exist - generate the key
+    if [ "${bForce:-0}" == "1" ]  || [ ! -e "${PrivateKeyFile}" ]; then
+        _generateKeyPairs $*
+        # now the file must exist (!)
+        if [ -e "${PrivateKeyFile}" ]; then
+            if [ -e "${PublicKeyFile_SSH}" ] && [ -e "${PublicKeyFile_PEM}" ]; then
+                echo -e "\n[I].. Keys are now in place..."
+                if [ ! -e ${DefaultPrivateKeyFile} ]; then
+                    echo "Currently there is no default key file in place ($DefaultPrivateKeyFileName)".
+                    local strYN=$(readKey "... do you want to make this key also your default key ? [Y/n] " "Y" "[YNyn]" )
+                    echo #
+                    if [ "${strYN@U}" == "Y" ]; then
+                        _makeCurrentKeysAsDefault
+                    fi
+                fi
+            else   
+                echo -e "\n[E] something went wrong... missing public keys"
+            fi 
+
+        else
+            echo "[E] creating key..."
+        fi
+    fi
+}
+
+funcCreatePublicKeys() {
+    if [ -e "${PrivateKeyFile}" ]; then
+        _generatePublicKeys $*
+    else
+        funcCreateKeys $*
+    fi
+}
+
+funcMakeKeyAsDefault() {
+    echo "Making the current key \"${PrivateKeyFile}\" also the default key \"${DefaultPrivateKeyFile}\""
+    if [ ! -e "${PrivateKeyFile}" ];then
+        echo "[E] Private key file \"${PrivateKeyFile}\" does not exist..."
+    elif [ ! -e "${PublicKeyFile_PEM}" ];then
+        echo "[E] Public key file \"${PublicKeyFile_PEM}\" does not exist..."
+    elif [ ! -e "${PublicKeyFile_SSH}" ];then
+        echo "[E] Public key file \"${PublicKeyFile_SSH}\" does not exist..."
+    else
+        echo "... storing keys"
+        _makeCurrentKeysAsDefault
+    fi
+}
+
+# Store the key on a target machine...
+# and create a config entry - if the user likes to do
+funcStoreKeyAt () {
+    echo "... checking for public SSH key"
+    if [ ! -e "${PublicKeyFile_SSH}" ]; then
+        local strYN=$(readKey "... key does not exist, do you want to create the key now ? [N/y] " "N" "[YNyn]")
+        echo # - Insert a new line..
+        # if the answer is yes... recursive call yourself.
+        if [ "${strYN@L}" == "y" ]; then
+            bForce="1"
+            _generatePublicKeys $*
+        fi
+    fi
+    if [ -e "${PublicKeyFile_SSH}" ]; then 
+        if [ "${strTargetName}" == "" ]; then
+            echo "[E] please specify a target with the switch -target like  otto@computer"
+        else
+            echo "... transfering public key to target (please authenticate if asked)"
+            echo     "${PublicKeyFile_SSH} to ${strTargetName}"
+            echo ""
+            ssh-copy-id -i "${PublicKeyFile_SSH}" "${strTargetName}"
+            local strYN=$(readKey "Create also a config entry for this target ? [Y/n] " "Y" "[YNyn]" )
+            echo # - Insert a new line..
+            if [ "${strYN@L}" == "y" ]; then
+                funcCreateConfigEntry
+            fi
+        fi
+    else 
+        echo "[E] public SSH key does not exist: ${PublicKeyFile_SSH}" 
+    fi
+}
+
+funcCreateConfigEntry() {
+    trace "funcCreateConfigEntry(${1:-$strTargetName})"
+    local strTargetName="${1:-$strTargetName}"
+    local strTargetHostAddress=$(stringAfter "$strTargetName" "@" )
+    local strUserID=$(stringBefore "$strTargetName" "@" "" )
+    local strConfigFile="${KeyLocation}/config"
+    trace " - HostAddress : $strTargetHostAddress  / $strTargetName "
+    local strHostEntry=$(_getAliasName "${strTargetHostAddress}")
+    trace " - searching for entry \"^Host\s*$strHostEntry\" in ${strConfigFile}"
+    if [ -e "${strConfigFile}" ]; then
+        if  _hasConfigEntry "${strConfigFile}" "$strHostEntry" ; 
+            then
+                trace "Removing entry $strHostEntry" 
+                _removeConfigEntry "${strConfigFile}" "$strHostEntry" 
+            else
+                trace "No entry of $strHostEntry found..." 
+        fi
+    else 
+        touch "$strHostEntry"
+    fi
+    echo "Host $strHostEntry">>"${strConfigFile}"
+    echo "     HostName      $strTargetHostAddress">>"${strConfigFile}"
+    echo "     IdentityFile  $PrivateKeyFile">>"${strConfigFile}"
+    [[ "${strUserID}" != "" ]] && echo "     User          $strUserID">>"${strConfigFile}"
+    echo "" >>"${strConfigFile}"
+}
+
+funcRemoveConfigEntry() {
+    trace "funcRemoveConfigEntry(${1:-$strTargetName})"
+    local strConfigFile="${KeyLocation}/config"
+    if [ -e "${strConfigFile}" ]; then
+        local strTargetName="${1:-$strTargetName}"
+        local strTargetHostAddress=$(stringAfter "$strTargetName" "@" )
+        trace " - HostAddress : $strTargetHostAddress  / $strTargetName "
+        local strHostEntry=$(_getAliasName "${strTargetHostAddress}")
+        trace " - searching for entry \"^Host\s*$strHostEntry\" in ${strConfigFile}"
+        if  _hasConfigEntry "${strConfigFile}" "$strHostEntry" ; then
+            trace "Removing entry $strHostEntry" 
+            _removeConfigEntry "${strConfigFile}" "$strHostEntry" 
+        else
+            echo "Config entry $strHostEntry not found in config file ($strConfigFile)"
+        fi
+    else
+        echo "No config file in place ($strConfigFile) - no action taken"
+    fi
+
+}
+
+funcShowConfig() {
+    local strConfigFile="${KeyLocation}/config"
+    cat "${strConfigFile}"
+    echo #
+}
+
+funcGetPublicKey_SSH() {
+    if [ -e "${PublicKeyFile_SSH}" ]; then
+        local TargetLocation=${strTarget:-"."}
+        echo "Storing SSH key \"${PublicKeyFileName_SSH}\" to ${TargetLocation}"
+        cp -v "${PublicKeyFile_SSH}" "${TargetLocation}"
+    else   
+        echo "[E] public ssh key ${PublicKeyFile_SSH} not found"
+    fi
+}
+
+_setAccessForFiles() {
+    local strAccess=$1
+    local strMask=$2
+    for oFile in $strMask
+    do
+        trace "setting access $strAccess to $oFile"
+        chmod $strAccess "${oFile}"
+    done
+}
+
+_syncConfigEntriesTo() {
+    local strSourceConfig=$1
+    local strTargetConfig=$2
+    trace "_syncConfigEntriesTo( $1 , $2 )"
+    local strTokenLine="##### ##### ##### Delimiter Token for removeConfigEntry ##### #####"
+    if [ -e "${strSourceConfig}" ]; then
+        [[ ! -e "${strTargetConfig}" ]] && touch "${strTargetConfig}" 
+        sed -n -e "/^Host/p" "$strSourceConfig" | tr -d '\r' > /tmp/dd.dat
+        while read entry
+        # for entry in $(sed -n -e "/^Host/p" "$strSourceConfig")
+        do
+            
+            local tLineEntries=($entry)
+            local strAlias=$(echo ${tLineEntries[1]});
+            ## Remove the entry from the target config - if exists..
+            local nCount=$(grep -c "Host\s*$strAlias\s*$" "${strTargetConfig}" )
+            if [ "$nCount" -gt "0" ]; then
+                _removeConfigEntry "${strTargetConfig}" "${strAlias}"
+            fi
+            ## Insert a delimiter for identification
+            trace "inserting delims into config file $strSourceConfig"
+            sed -i -e "/^Host/i${strTokenLine}" "$strSourceConfig"
+            ## Extract matching entry...
+            trace "extracting entry \"$entry\""
+            sed -n -e "/$entry/,/${strTokenLine}/p" "$strSourceConfig" > /tmp/dd-dat.txt
+            echo " - transfering config entry \"${strAlias}\" to ${strTargetConfig} ..."
+            cat /tmp/dd-dat.txt >> "${strTargetConfig}"
+            ## Remove the delimiters
+            trace "removing delims from config files"
+            sed -i -e "/${strTokenLine}/d" "$strSourceConfig"
+            sed -i -e "/${strTokenLine}/d" "$strTargetConfig"
+            
+        done  < /tmp/dd.dat
+        rm /tmp/dd.dat
+        rm /tmp/dd-dat.txt            
+    else
+        trace "Missing source config file ($strSourceConfig) - ignoring step"
+    fi
+}
+
+funcSyncKeysToWindows() {
+    writeActionTitle "Syncing keys and config from unix $KeyLocation to windows"
+    if [ -d ".ssh" ]; then
+        if [ "$PWD/.ssh" != "$KeyLocation" ]; then
+            echo "storing keys..."
+            for oFile in ${KeyLocation}/id*
+            do
+                cp -v "${oFile}" ".ssh/"
+                # chmod 600 "${KeyLocation}/id_rsa"
+            done
+            # _setAccessForFiles "600" ".ssh/id*"
+            # _setAccessForFiles "644" ".ssh/id*pub*"
+
+            _syncConfigEntriesTo "${KeyLocation}/config" ".ssh/config" 
+
+
+            # local strConfigFile=".ssh/config"
+            # if [ -e "${strConfigFile}" ]; then
+              #  _syncConfigEntriesTo "${strConfigFile}" "${KeyLocation}/config.dat"
+                # echo "... storing config"
+                # cp -v "${strConfigFile}" "${KeyLocation}/"
+            # fi
+        else    
+            echo "[E] please execute this command from the users home dir \"/mnt/c/Users/<UserID>\""
+        fi
+    else
+        echo "[E] please execute this command from the users home dir \"/mnt/c/Users/<UserID>\""
+        echo "[E] also ensure, a .ssh directory is in place and has the correct access rights !"
+    fi
+
+}
+
+funcSyncKeysFromWindows() {
+    writeActionTitle "Syncing keys and config from windows to $KeyLocation"
+    if [ -d ".ssh" ]; then
+        if [ "$PWD/.ssh" != "$KeyLocation" ]; then
+            _createKeyLocation
+            echo "storing keys..."
+            for oFile in .ssh/id*
+            do
+                cp -v "${oFile}" "${KeyLocation}/"
+                # chmod 600 "${KeyLocation}/id_rsa"
+            done
+            _setAccessForFiles "600" "$KeyLocation/id*"
+            _setAccessForFiles "644" "$KeyLocation/id*pub*"
+
+            _syncConfigEntriesTo ".ssh/config" "${KeyLocation}/config"
+
+
+            # local strConfigFile=".ssh/config"
+            # if [ -e "${strConfigFile}" ]; then
+              #  _syncConfigEntriesTo "${strConfigFile}" "${KeyLocation}/config.dat"
+                # echo "... storing config"
+                # cp -v "${strConfigFile}" "${KeyLocation}/"
+            # fi
+        else    
+            echo "[E] please execute this command from the users home dir \"/mnt/c/Users/<UserID>\""
+        fi
+    else
+        echo "[E] please execute this command from the users home dir \"/mnt/c/Users/<UserID>\""
+        echo "[E] also ensure, a .ssh directory is in place"
+    fi
+}
+
+
+
+funcShowHelp() {
+    echo ""
+    echo "Possible commands are:"
+    echo "----------------------"
+    echo "  createKeys       : Creates a specific key pair for the user on this computer."
+    echo "                 The key is stored in ~/.ssh with the name \"${PrivateKeyFileName}\"."
+    echo "                 If the key already exists, you will be prompted to use the -force param or to generate it know."
+    echo "                 Also the public keys for PEM and SSH will be generated."
+    echo "      -force     If an already existing key should be replaced, use this switch."
+    echo ""
+    echo "  createPublicKeys : Creates new public keys in format PEM and SSH"
+    echo "                 If you lost the public keys, you can regenerate them with this call."
+    echo "                 If no private key is in place, the private key will be generated first."
+    echo "                 In this case, it is the same as if you are using the command \"createKeys\"."
+    echo ""
+    echo "  getPublicSSHKey : Copies the public SSH key."
+    echo "                 The key is stored in the current location, or as defined in -target."
+    echo "      -target    If defined, the target location, where the key should be stored."
+    echo ""
+    echo "  makeKeyAsDefault : Copy this key to the default key for ssh."
+    echo "                 Make the key \"${PrivateKeyFileName}\" also as your default key."
+    echo "                 Existing \"${DefaultPrivateKeyFileName}\" (also the matching public keys) will be replaced."
+    echo ""
+    echo "  storeKeyAt   : The ssh key \"${PublicKeyFileName_SSH}\" will be transfered and stored at the target."
+    echo "                 If the key does not exist, it will be created by using 'createKeys'"
+    echo "                 A config entry will be created for the target to enable the access."
+    echo "      -target    The target computer name / address. (Format userid@hostname.domain.com)"
+    echo "      -alias     The alias name in the config file."
+    echo "                 If not specified, the hostname part of the -target switch will be used.."           
+    echo ""
+    echo "  createConfigEntry : Create a config entry for simple ssh access."
+    echo "                 The entry will be generated and will replace an existing one with the same alias"
+    echo "      -target    The target computer name / address. (Format userid@hostname.domain.com)"
+    echo "      -alias     The alias name in the config file."
+    echo "                 If not specified, the hostname part of the -target switch will be used.."           
+    echo ""
+    echo "  removeConfigEntry : Remove a config entry for simple ssh access."
+    echo "                 The entry will be generated and will replace an existing one with the same alias"
+    echo "      -target    The target computer name / address. (Format userid@hostname.domain.com)"
+    echo "      -alias     The alias name in the config file."
+    echo "                 If not specified, the hostname part of the -target switch will be used.."           
+    echo ""
+    echo "  showConfig     : Shows the current config file (easy access)."
+    echo ""
+    echo "  syncKeysToWindows : Synchronise the local ssh keys and settings to windows."
+    echo "                 All local keys and the config will be copied to the windows .ssh path of the current user."
+    echo "                 - Works only on Windows - Unix Subsystem (!)"
+    echo "                 Execute this command in the windows user directory !"
+    echo ""
+    echo "  syncKeysFromWindows : Synchronise the windows ssh keys and settings to local store."
+    echo "                 All window keys and the config will be copied to the .ssh of the current user."
+    echo "                 - Works only on Windows - Unix Subsystem (!)"
+    echo "                 Execute this command in the windows user directory !"
+    echo ""
+}
+
+_dispatchCommand (){
+    case "${strCommand@L}" in
+        "createkeys") 
+            funcCreateKeys  
+            ;;
+        "createpublickeys") 
+            funcCreatePublicKeys  
+            ;;
+        "getpublicsshkey") 
+            funcGetPublicKey_SSH  
+            ;;
+
+        "makekeyasdefault")
+            funcMakeKeyAsDefault
+            ;;
+
+        "storekeyat")
+            funcStoreKeyAt
+            ;;
+
+        "synckeysfromwindows")
+            funcSyncKeysFromWindows
+            ;;
+
+        "synckeystowindows")
+            funcSyncKeysToWindows
+            ;;
+
+        "createconfigentry")
+            funcCreateConfigEntry "${strTargetName}"
+            ;;
+
+        "removeconfigentry")
+            funcRemoveConfigEntry "${strTargetName}"
+            ;;
+
+        "showconfig")
+            funcShowConfig
+            ;;
+
+        "help")
+            funcShowHelp
+            ;;
+        *)
+            echo "[E] unknown command : [${strCommand}]..."
+            funcShowHelp 
+            ;;
+    esac
+}
+
+_initialize $*
+_dispatchCommand
+

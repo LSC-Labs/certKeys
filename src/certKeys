@@ -7,7 +7,7 @@
 #    1  == Command
 # 
 # **************************************************************
-Prog_Version=0.1.1.0
+Prog_Version=0.1.2.0
 
 source "$(dirname "${BASH_SOURCE[0]}")/LScriptLibV1.sh"
 
@@ -312,6 +312,50 @@ funcRemoveConfigEntry() {
 
 }
 
+_checkPrivateKeyAccess() {
+    local keyFile=$1 metadata owner mode currentUser bsdStat=0
+    currentUser=$(id -u)
+    if ! metadata=$(stat -Lc '%u %a' "$keyFile" 2>/dev/null); then
+        bsdStat=1
+        if ! metadata=$(stat -Lf '%u %Lp' "$keyFile" 2>/dev/null); then
+            printf '[W] Cannot check private key permissions: %s\n' "$keyFile" >&2
+            return 0
+        fi
+    fi
+    read -r owner mode <<< "$metadata"
+    if [ "$owner" != "$currentUser" ] || { [ "$mode" != 400 ] && [ "$mode" != 600 ]; }; then
+        printf '[W] Private key permissions need attention: %s (owner UID %s, mode %s). Expected owner UID %s and mode 400 or 600; check ownership and use chmod 600 on this file.\n' \
+            "$keyFile" "$owner" "$mode" "$currentUser" >&2
+    fi
+    # macOS ACL grants can expose a file even when its POSIX mode is 600.
+    if [ "$bsdStat" = 1 ] && LC_ALL=C ls -lde "$keyFile" 2>/dev/null | awk 'NR > 1 && / allow / { found=1 } END { exit !found }'; then
+        printf '[W] Private key has additional ACL grants; review access with ls -le: %s\n' "$keyFile" >&2
+    fi
+    return 0
+}
+
+funcListKeys() {
+    local keyFile firstLine found=0
+    printf 'Private keys in %s:\n' "$KeyLocation"
+    # Inspect only the first line, including hidden files and nonstandard names.
+    for keyFile in "$KeyLocation"/* "$KeyLocation"/.[!.]* "$KeyLocation"/..?*; do
+        [ -f "$keyFile" ] && [ -r "$keyFile" ] || continue
+        firstLine=''
+        IFS= read -r firstLine < "$keyFile" || :
+        firstLine=${firstLine%$'\r'}
+        case "$firstLine" in
+            '-----BEGIN PRIVATE KEY-----'|'-----BEGIN ENCRYPTED PRIVATE KEY-----'|\
+            '-----BEGIN OPENSSH PRIVATE KEY-----'|'-----BEGIN RSA PRIVATE KEY-----'|\
+            '-----BEGIN DSA PRIVATE KEY-----'|'-----BEGIN EC PRIVATE KEY-----')
+                printf '%s\n' "$keyFile"
+                _checkPrivateKeyAccess "$keyFile"
+                found=1
+                ;;
+        esac
+    done
+    [ "$found" = 1 ] || echo 'No private keys found.'
+}
+
 funcShowConfig() {
     local strConfigFile="${KeyLocation}/config"
     cat "${strConfigFile}"
@@ -459,11 +503,54 @@ funcSyncKeysFromWindows() {
 
 
 
+# Compare dotted numeric versions without relying on GNU sort -V.
+_versionIsNewer() {
+    LC_ALL=C awk -v latest="$1" -v current="$2" 'BEGIN {
+        n = split(latest, a, "."); m = split(current, b, ".")
+        for (i = 1; i <= n || i <= m; i++) {
+            if (a[i] + 0 > b[i] + 0) exit 0
+            if (a[i] + 0 < b[i] + 0) exit 1
+        }
+        exit 1
+    }'
+}
+
+funcShowVersion() {
+    printf 'certKeys version: %s\n' "$Prog_Version"
+    if ! command -v curl >/dev/null 2>&1; then
+        echo '[E] Update check unavailable: curl is required.' >&2
+        return 1
+    fi
+    local response latest tag
+    if ! response=$(curl --fail --silent --show-error --location \
+        --connect-timeout 5 --max-time 10 \
+        --header 'Accept: application/vnd.github+json' \
+        https://api.github.com/repos/LSC-Labs/certKeys/releases/latest 2>/dev/null); then
+        echo '[E] Update check failed: GitHub is unavailable (network, HTTP error or rate limit).' >&2
+        return 1
+    fi
+    # GitHub release tags are plain dotted numeric versions, optionally prefixed with v.
+    tag=$(printf '%s\n' "$response" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    latest=${tag#v}
+    if ! [[ $latest =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+        echo '[E] Update check failed: GitHub returned an unsupported release version.' >&2
+        return 1
+    fi
+    printf 'Latest GitHub release: %s\n' "$latest"
+    if _versionIsNewer "$latest" "$Prog_Version"; then
+        echo "Update available: $Prog_Version -> $latest"
+        printf 'Download: https://github.com/LSC-Labs/certKeys/releases/download/%s/certKeys\n' "$tag"
+    else
+        echo 'No newer release available.'
+    fi
+}
+
 funcShowHelp() {
 
     echo "Usage:"
     echo "------"
     echo "certKeys \<Command\> [-force] [-default] [-context] [-algorithm] [-target] [-alias]"
+    echo "certKeys -version : show the installed version and check GitHub for updates."
     echo ""
     echo "Switches (availability depends on the command):"
     echo "--------------------------------"
@@ -525,6 +612,9 @@ funcShowHelp() {
     echo "      -alias     The alias name in the config file."
     echo "                 If not specified, the hostname part of the -target switch will be used.."           
     echo ""
+    echo "  list         : List private key paths in the user's .ssh directory."
+    echo "                 Warn about incorrect ownership, permissions or additional macOS ACL grants."
+    echo ""
     echo "  showConfig   : Shows the current config file (easy access)."
     echo ""
     if _isWindowsUnixShell; then
@@ -578,6 +668,10 @@ _dispatchCommand (){
             funcRemoveConfigEntry "${strTargetName}"
             ;;
 
+        "list")
+            funcListKeys
+            ;;
+
         "showconfig")
             funcShowConfig
             ;;
@@ -592,6 +686,9 @@ _dispatchCommand (){
     esac
 }
 
-_initialize "$@"
-_dispatchCommand
-
+if [ -n "$(getArgumentSwitchValue version)" ]; then
+    funcShowVersion
+else
+    _initialize "$@"
+    _dispatchCommand
+fi

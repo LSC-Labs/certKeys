@@ -7,6 +7,91 @@ Language / Sprache: **English** | [Deutsch](README.de.md)
 also synchronise keys and configuration between a Unix shell and the Windows
 user directory.
 
+## Native Windows edition (PowerShell)
+
+`certKeys.ps1` runs in Windows PowerShell 5.1 or PowerShell 7 without Bash,
+Git Bash, Cygwin, or WSL. Install Windows OpenSSH Client (`ssh.exe` and
+`ssh-keygen.exe`) and native OpenSSL (`openssl.exe`) and make them available on
+`PATH`. OpenSSL is needed for key creation and PEM export. The update check uses
+PowerShell's HTTP client and does not require `curl`.
+
+For a release that includes the Windows edition, download **`certKeys.ps1` and
+`certKeys.bat`** from its release assets and keep them in the same directory.
+The build produces both files; attach each as an individual download when
+publishing the Windows release. Install into the current user's application
+directory in PowerShell:
+
+```powershell
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\certKeys'
+New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+foreach ($file in @('certKeys.ps1', 'certKeys.bat')) {
+    Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://github.com/LSC-Labs/certKeys/releases/latest/download/$file" `
+        -OutFile (Join-Path $installDir $file)
+    Unblock-File -LiteralPath (Join-Path $installDir $file)
+}
+$userPath = [string][Environment]::GetEnvironmentVariable('Path', 'User')
+if ($installDir -notin ($userPath -split ';')) {
+    [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $installDir), 'User')
+}
+$env:Path = $installDir + ';' + $env:Path
+certKeys.bat help
+certKeys.bat -version
+```
+
+Then run directly in a newly opened **cmd.exe**:
+
+```bat
+certKeys help
+certKeys list
+certKeys -version
+```
+
+`certKeys.bat` starts Windows PowerShell with `-NoLogo -NoProfile
+-ExecutionPolicy Bypass -File`, locates `certKeys.ps1` beside itself, forwards
+arguments and returns PowerShell's exit code. The execution policy applies only
+to this process; user and system settings remain unchanged. Group Policy can
+still restrict execution. Interactive prompts remain available. Installation
+needs no administrator rights. In PowerShell, explicitly invoke `certKeys.bat`
+so the adjacent `.ps1` is not selected instead. Replace both files when updating.
+Direct `.ps1` invocation remains subject to the current PowerShell session's
+execution policy.
+
+All commands and parameters documented below also apply to the Windows edition.
+It stores keys and `config` in `%USERPROFILE%\.ssh`, uses the lowercase computer
+name as the default context, writes UTF-8 files without a BOM, and restricts
+private keys and SSH configuration to the current Windows user with Windows ACLs.
+RSA keys use `-algorithm rsa` and `-keybits` (default 2048). `-force`, `-default`,
+`-trace`, `-alias`, `-target`, and `-version` are supported, including mixed-case
+parameter names and explicit boolean values.
+
+```powershell
+certKeys createKeys -context work -keybits 4096
+certKeys createConfigEntry -context work -target alice@server.example -alias workserver
+certKeys getPublicSSHKey -context work -target "$env:USERPROFILE\Desktop"
+```
+
+`storeKeyAt` replaces `ssh-copy-id` with native `ssh.exe`: it sends only the
+public key to a **Unix/POSIX SSH server** and avoids adding duplicate key lines.
+Authentication and host-key confirmation are handled by OpenSSH. Remote Windows
+OpenSSH servers with a PowerShell default shell are not supported by this command.
+
+In the native edition, `syncKeysToWindows` copies from a second home directory
+into `%USERPROFILE%\.ssh`; `syncKeysFromWindows` copies in the opposite direction.
+Specify the other home with `-target`, or run from that home directory. Its `.ssh`
+subdirectory must already exist. Files are overwritten and matching Host blocks
+are replaced; unrelated destination entries remain. Use a Windows filesystem
+that supports Windows ACLs; for WSL's Linux filesystem, run the Bash edition
+inside WSL instead.
+
+```powershell
+certKeys syncKeysToWindows -target 'D:\UnixHome'
+certKeys syncKeysFromWindows -target 'D:\UnixHome'
+```
+
+The Bash requirements and Unix-shell installation below apply to the `certKeys`
+asset. Native Windows users install `certKeys.ps1` and `certKeys.bat` as described above.
+
 ## Requirements and installation
 
 Supported environments are macOS, Debian/Ubuntu Linux, and Unix shells running
@@ -14,6 +99,7 @@ under Windows (WSL, MSYS/Git Bash, and Cygwin). Requirements:
 
 - Bash 3.2 or newer;
 - OpenSSL for key generation and PEM export;
+- `curl` for `-version` update checks;
 - OpenSSH with `ssh-keygen`, plus `ssh-copy-id` for `storeKeyAt`;
 - standard Unix utilities, including `awk`, `tr`, `mktemp`, `cp`, and `chmod`.
 
@@ -92,11 +178,14 @@ python3 scripts/build.py
 
 The build embeds `src/LScriptLibV1.sh` into `src/certKeys`, writing the result to `release/certKeys`. Only this generated
 file needs to be distributed; the runtime programs listed above are still
-required. The generated `release/` directory is ignored by Git.
+required. The build also copies the standalone Windows edition to `release/certKeys.ps1`
+and the CMD launcher to `release/certKeys.bat`, and verifies that both script
+editions have the same version. The generated `release/`
+directory is ignored by Git.
 
 The GitHub Actions workflow **Release build** runs on pushes, pull requests,
 and manual dispatch. It builds and tests the executable, then makes it available
-as the `certKeys-release` artifact for release publication. After downloading
+as the `certKeys-release` artifact containing all three files for release publication. After downloading
 the artifact, run `chmod +x certKeys` if needed. The compatibility workflow also
 tests the bundled executable on Linux and macOS.
 
@@ -115,6 +204,24 @@ The first command may ask whether to copy the new key to the default key files
 as well. `storeKeyAt` authenticates with the target server over SSH and then
 offers to create a local configuration entry. If you confirm that prompt, the
 `workserver` alias is available for the final command.
+
+## Version and update check
+
+```sh
+certKeys -version
+```
+
+Prints the installed version and checks the latest published GitHub release.
+If a newer version exists, it shows the version and a direct download link for
+`certKeys`. Version components are compared numerically. No files are downloaded
+or installed automatically; use the installation instructions above to update.
+
+This option requires `curl` and internet access. The connection timeout is five
+seconds and the request timeout is ten seconds. If `curl` is missing or the
+request fails (including GitHub rate limits), the installed version is still
+shown and the command exits with status 1 and an error message. A successful
+check exits with status 0, whether or not an update is available. `-version`
+takes precedence over other commands and does not modify keys or configuration.
 
 ## Invocation and arguments
 
@@ -178,7 +285,7 @@ certKeys getPublicSSHKey -context project-a -target /tmp
 
 Always supply a name. A standalone `-context` does not select the computer name;
 it currently results in an empty context in the filename. This parameter has no
-effect on `removeConfigEntry`, `showConfig`, or the synchronisation commands.
+effect on `list`, `removeConfigEntry`, `showConfig`, or the synchronisation commands.
 
 ### `-default [1|0]`
 
@@ -285,6 +392,42 @@ The boolean parameters `-default`, `-force`, and `-trace` accept, among other
 values, `1`/`true` to enable them and `0`/`false` to disable them.
 
 ## Commands
+
+### `list` – List private keys
+
+```sh
+certKeys list
+```
+
+Lists the full paths of readable private key files directly in the user's SSH
+directory: `$HOME/.ssh` in the Bash edition, `%USERPROFILE%\.ssh` in the native
+Windows edition. Both default and context keys are listed, including custom
+filenames and hidden files. `-context`, `-default`, and `-algorithm` do not filter
+the list.
+
+Files are identified by their first-line OpenSSH or PEM private-key header
+(OpenSSH, RSA, DSA, EC, PKCS#8, or encrypted PKCS#8); encrypted keys are included
+without asking for a passphrase. The command lists paths only, never key contents,
+and does not validate or decrypt the keys. Public keys, SSH configuration and
+other files without a recognized header are omitted. Subdirectories are not
+searched. A missing or empty SSH directory produces `No private keys found.`
+and is not created or modified. No additional cryptographic tools are required.
+
+For each recognized key, `list` also checks its permissions. On Unix, the key
+must belong to the current user and have mode `400` or `600`; macOS ACL grants
+are flagged separately. On Windows, the owner must be the current user, ACL
+inheritance must be disabled, and access grants may name only that user,
+`SYSTEM`, or the built-in Administrators group. Other grants are flagged for
+review, including inherited rules; deny rules do not suppress this warning.
+
+Warnings on standard error identify the affected file and explain the issue.
+If permissions cannot be inspected, the command reports that as a warning too.
+It continues listing other keys and exits successfully despite these warnings.
+It does not change ownership or permissions. On Unix, check ownership and use
+`chmod 600 /path/to/private-key` as appropriate; inspect macOS ACLs with `ls -le`.
+On Windows, review the file's Security settings or use `icacls` to restrict
+access. Only readable files with a recognized header are checked; unreadable
+files cannot be identified as private keys and are omitted.
 
 ### `help` – Display help
 

@@ -7,6 +7,96 @@ Sprache / Language: [English](README.md) | **Deutsch**
 können außerdem Schlüssel und Konfiguration zwischen einer Unix-Shell und dem
 Windows-Benutzerverzeichnis abgeglichen werden.
 
+## Native Windows-Variante (PowerShell)
+
+`certKeys.ps1` läuft unter Windows PowerShell 5.1 oder PowerShell 7 ohne Bash,
+Git Bash, Cygwin oder WSL. Benötigt werden der Windows-OpenSSH-Client (`ssh.exe`
+und `ssh-keygen.exe`) sowie natives OpenSSL (`openssl.exe`) im `PATH`. OpenSSL
+wird zur Schlüsselerzeugung und zum PEM-Export benötigt. Die Updateprüfung
+verwendet den HTTP-Client von PowerShell und benötigt kein `curl`.
+
+Bei einem Release mit Windows-Variante **`certKeys.ps1` und `certKeys.bat`** aus
+dessen Release-Assets herunterladen und im selben Verzeichnis ablegen. Der Build
+erzeugt beide Dateien; bei der Veröffentlichung werden sie als einzelne Downloads
+an das Windows-Release angehängt. In PowerShell in das Anwendungsverzeichnis des
+aktuellen Benutzers installieren:
+
+```powershell
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\certKeys'
+New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+foreach ($file in @('certKeys.ps1', 'certKeys.bat')) {
+    Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://github.com/LSC-Labs/certKeys/releases/latest/download/$file" `
+        -OutFile (Join-Path $installDir $file)
+    Unblock-File -LiteralPath (Join-Path $installDir $file)
+}
+$userPath = [string][Environment]::GetEnvironmentVariable('Path', 'User')
+if ($installDir -notin ($userPath -split ';')) {
+    [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $installDir), 'User')
+}
+$env:Path = $installDir + ';' + $env:Path
+certKeys.bat help
+certKeys.bat -version
+```
+
+Danach funktioniert der direkte Aufruf in einer neu geöffneten **cmd.exe**:
+
+```bat
+certKeys help
+certKeys list
+certKeys -version
+```
+
+`certKeys.bat` startet Windows PowerShell mit `-NoLogo -NoProfile
+-ExecutionPolicy Bypass -File`, findet `certKeys.ps1` relativ zum eigenen
+Verzeichnis, reicht die Argumente weiter und gibt den PowerShell-Exitcode zurück.
+Die Ausführungsrichtlinie wird nur für diesen Prozess gesetzt; Benutzer- und
+Systemeinstellungen werden nicht verändert. Gruppenrichtlinien können die
+Ausführung weiterhin einschränken. Interaktive Rückfragen bleiben verfügbar.
+Die Installation benötigt keine Administratorrechte. In PowerShell den Starter
+explizit als `certKeys.bat` aufrufen, damit die direkt daneben liegende `.ps1`
+nicht stattdessen ausgewählt wird. Bei Aktualisierungen beide Dateien ersetzen.
+Für das direkte Ausführen der `.ps1` gelten weiterhin die Ausführungsrichtlinien
+der jeweiligen PowerShell-Sitzung.
+
+Alle unten dokumentierten Befehle und Parameter gelten auch für die Windows-Variante.
+Schlüssel und `config` liegen unter `%USERPROFILE%\.ssh`; der Standardkontext ist
+der Computername in Kleinbuchstaben. Die Dateien werden als UTF-8 ohne BOM
+angelegt. Private Schlüssel und SSH-Konfiguration erhalten Windows-ACLs, die nur
+dem aktuellen Benutzer Zugriff gewähren. RSA-Schlüssel verwenden `-algorithm rsa`
+und `-keybits` (Standard 2048). `-force`, `-default`, `-trace`, `-alias`, `-target`
+und `-version` werden unterstützt, auch mit gemischter Groß-/Kleinschreibung der
+Parameternamen und expliziten booleschen Werten.
+
+```powershell
+certKeys createKeys -context arbeit -keybits 4096
+certKeys createConfigEntry -context arbeit -target alice@server.example -alias arbeitsserver
+certKeys getPublicSSHKey -context arbeit -target "$env:USERPROFILE\Desktop"
+```
+
+`storeKeyAt` ersetzt `ssh-copy-id` durch natives `ssh.exe`: Nur der öffentliche
+Schlüssel wird an einen **Unix/POSIX-SSH-Server** übertragen; doppelte
+Schlüsselzeilen werden vermieden. Anmeldung und Hostschlüsselbestätigung übernimmt
+OpenSSH. Windows-OpenSSH-Zielserver mit PowerShell als Standardshell werden von
+diesem Befehl nicht unterstützt.
+
+In der nativen Variante kopiert `syncKeysToWindows` aus einem zweiten
+Home-Verzeichnis nach `%USERPROFILE%\.ssh`; `syncKeysFromWindows` kopiert in die
+Gegenrichtung. Das andere Home mit `-target` angeben oder aus diesem Verzeichnis
+aufrufen. Dessen Unterverzeichnis `.ssh` muss bereits existieren. Dateien werden
+überschrieben und passende Host-Blöcke ersetzt; andere Zieleinträge bleiben
+erhalten. Ein Windows-Dateisystem mit Windows-ACL-Unterstützung verwenden; für
+das Linux-Dateisystem von WSL stattdessen die Bash-Variante innerhalb von WSL nutzen.
+
+```powershell
+certKeys syncKeysToWindows -target 'D:\UnixHome'
+certKeys syncKeysFromWindows -target 'D:\UnixHome'
+```
+
+Die folgenden Bash-Voraussetzungen und die Unix-Shell-Installation beziehen sich
+auf das Asset `certKeys`. Für natives PowerShell gilt die obige Installation von
+`certKeys.ps1` und `certKeys.bat`.
+
 ## Voraussetzungen und Installation
 
 Unterstützt werden macOS, Debian/Ubuntu Linux sowie Unix-Shells unter Windows
@@ -14,6 +104,7 @@ Unterstützt werden macOS, Debian/Ubuntu Linux sowie Unix-Shells unter Windows
 
 - Bash ab Version 3.2;
 - OpenSSL zur Schlüsselerzeugung und zum PEM-Export;
+- `curl` für die Updateprüfung mit `-version`;
 - OpenSSH mit `ssh-keygen` und für `storeKeyAt` zusätzlich `ssh-copy-id`;
 - die üblichen Unix-Werkzeuge, unter anderem `awk`, `tr`, `mktemp`, `cp` und `chmod`.
 
@@ -95,11 +186,14 @@ python3 scripts/build.py
 Der Build bettet `src/LScriptLibV1.sh` in `src/certKeys` ein und schreibt das
 Ergebnis nach `release/certKeys`. Für die Weitergabe
 wird nur diese erzeugte Datei benötigt; die oben genannten Laufzeitprogramme
-bleiben erforderlich. Das erzeugte Verzeichnis `release/` wird von Git ignoriert.
+bleiben erforderlich. Der Build kopiert außerdem die eigenständige Windows-Variante nach
+`release/certKeys.ps1` und den CMD-Starter nach `release/certKeys.bat`; außerdem
+prüft er, dass beide Skriptvarianten dieselbe Version haben.
+Das erzeugte Verzeichnis `release/` wird von Git ignoriert.
 
 Der GitHub-Actions-Workflow **Release build** läuft bei Pushes, Pull Requests
 und manueller Ausführung. Er baut und testet die Datei und stellt sie anschließend
-als Artefakt `certKeys-release` für die Releaseveröffentlichung bereit. Nach dem
+als Artefakt `certKeys-release` mit allen drei Dateien für die Releaseveröffentlichung bereit. Nach dem
 Herunterladen des Artefakts gegebenenfalls `chmod +x certKeys` ausführen. Der
 Kompatibilitätsworkflow testet die gebündelte Datei zusätzlich unter Linux und
 macOS.
@@ -120,6 +214,26 @@ als Standardschlüssel kopiert werden soll. Bei `storeKeyAt` erfolgt die Anmeldu
 am Zielserver über SSH; anschließend kann ein lokaler Konfigurationseintrag
 angelegt werden. Wird diese Rückfrage bestätigt, ist der Alias `arbeitsserver`
 für den letzten Befehl verfügbar.
+
+## Version und Updateprüfung
+
+```sh
+certKeys -version
+```
+
+Zeigt die installierte Version an und prüft das neueste veröffentlichte
+GitHub-Release. Bei einer neueren Version werden die Versionsnummer und ein
+direkter Download-Link für `certKeys` angezeigt. Die Versionsbestandteile werden
+numerisch verglichen. Es erfolgt kein automatischer Download und keine
+Installation; zum Aktualisieren die Installationsanleitung oben verwenden.
+
+Diese Option benötigt `curl` und Internetzugang. Der Verbindungsaufbau ist auf
+fünf Sekunden, die gesamte Anfrage auf zehn Sekunden begrenzt. Fehlt `curl` oder
+schlägt die Anfrage fehl (auch bei GitHub-Ratenbegrenzung), wird die installierte
+Version trotzdem angezeigt; der Befehl endet mit Status 1 und einer Fehlermeldung.
+Eine erfolgreiche Prüfung endet mit Status 0, unabhängig davon, ob ein Update
+vorliegt. `-version` hat Vorrang vor anderen Befehlen und verändert weder
+Schlüssel noch Konfiguration.
 
 ## Aufruf und Argumente
 
@@ -185,7 +299,7 @@ certKeys getPublicSSHKey -context projekt-a -target /tmp
 
 Immer einen Namen angeben. Ein alleinstehendes `-context` wählt keinen
 Rechnernamen aus, sondern führt derzeit zu einem leeren Kontext im Dateinamen.
-Bei `removeConfigEntry`, `showConfig` und den Synchronisierungsbefehlen hat dieser
+Bei `list`, `removeConfigEntry`, `showConfig` und den Synchronisierungsbefehlen hat dieser
 Parameter keine Wirkung.
 
 ### `-default [1|0]`
@@ -294,6 +408,47 @@ Die booleschen Parameter `-default`, `-force` und `-trace` akzeptieren unter
 anderem `1`/`true` zum Einschalten und `0`/`false` zum Ausschalten.
 
 ## Befehle
+
+### `list` – Private Schlüssel auflisten
+
+```sh
+certKeys list
+```
+
+Listet die vollständigen Pfade lesbarer privater Schlüsseldateien direkt im
+SSH-Verzeichnis des Benutzers auf: `$HOME/.ssh` in der Bash-Variante,
+`%USERPROFILE%\.ssh` in der nativen Windows-Variante. Standard- und
+Kontextschlüssel werden ebenso erfasst wie eigene Dateinamen und versteckte
+Dateien. `-context`, `-default` und `-algorithm` filtern die Liste nicht.
+
+Die Erkennung erfolgt anhand der ersten Zeile mit einem OpenSSH- oder
+PEM-Private-Key-Header (OpenSSH, RSA, DSA, EC, PKCS#8 oder verschlüsseltes PKCS#8).
+Auch verschlüsselte Schlüssel erscheinen ohne Passwortabfrage. Ausgegeben werden
+nur Pfade, niemals Schlüsselinhalte; die Schlüssel werden weder validiert noch
+entschlüsselt. Öffentliche Schlüssel, SSH-Konfiguration und andere Dateien ohne
+passenden Header werden ausgelassen. Unterverzeichnisse werden nicht durchsucht.
+Bei fehlendem oder leerem SSH-Verzeichnis erscheint `No private keys found.`;
+das Verzeichnis wird weder erstellt noch verändert. Zusätzliche
+Kryptografieprogramme werden dafür nicht benötigt.
+
+Für jeden erkannten Schlüssel prüft `list` außerdem die Berechtigungen. Unter
+Unix muss die Datei dem aktuellen Benutzer gehören und den Modus `400` oder
+`600` haben; zusätzliche macOS-ACL-Freigaben werden gesondert gemeldet. Unter
+Windows muss der aktuelle Benutzer Besitzer sein, die ACL-Vererbung muss
+deaktiviert sein, und Zugriffsfreigaben dürfen nur den Benutzer selbst,
+`SYSTEM` oder die integrierte Administratorengruppe betreffen. Andere Freigaben
+werden zur Prüfung gemeldet, auch geerbte Regeln; Verweigerungsregeln unterdrücken
+diese Warnung nicht.
+
+Warnungen auf der Standardfehlerausgabe nennen den betroffenen Pfad und die
+Ursache. Auch wenn die Rechte nicht geprüft werden können, erscheint eine
+Warnung. Die Auflistung wird fortgesetzt und endet trotz dieser Warnungen mit
+Erfolg. Besitzer und Berechtigungen werden nicht verändert. Unter Unix den
+Besitzer prüfen und gegebenenfalls `chmod 600 /pfad/zum/privaten-schluessel`
+verwenden; macOS-ACLs lassen sich mit `ls -le` prüfen. Unter Windows die
+Sicherheitseinstellungen der Datei oder `icacls` verwenden, um den Zugriff zu
+beschränken. Geprüft werden nur lesbare Dateien mit erkanntem Header; unlesbare
+Dateien können nicht als private Schlüssel erkannt werden und werden ausgelassen.
 
 ### `help` – Hilfe anzeigen
 

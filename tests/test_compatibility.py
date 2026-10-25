@@ -1,14 +1,101 @@
-import os, pathlib, subprocess, sys, tempfile
+import os, pathlib, re, shutil, subprocess, sys, tempfile
 script=str(pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parents[1] / 'src' / 'certKeys')
 with tempfile.TemporaryDirectory(prefix='certKeys test ') as root:
     home=pathlib.Path(root)/'home with spaces';home.mkdir()
     env=dict(os.environ,HOME=str(home))
+    # Exercise the real version command without depending on GitHub or the network.
+    version=re.search(r'^Prog_Version=(.+)$',pathlib.Path(script).read_text(),re.M).group(1)
+    mock_bin=pathlib.Path(root)/'version bin';mock_bin.mkdir()
+    curl=mock_bin/'curl'
+    curl.write_text('#!/bin/bash\nif [ "$MOCK_CURL_FAIL" = 1 ]; then exit 22; fi\nprintf "%s\\n" "$MOCK_RELEASE"\n')
+    curl.chmod(0o755)
+    version_env=dict(env,PATH=str(mock_bin)+os.pathsep+env['PATH'])
+    for tag, expected in [
+        ('v'+version,'No newer release available.'),
+        (version,'No newer release available.'),
+        ('v0.0.0.0','No newer release available.'),
+        ('v0.1.10.0','Update available:'),
+        ('v1.0.0.0','Update available:'),
+    ]:
+        version_env['MOCK_RELEASE']='{"tag_name": "'+tag+'"}'
+        result=subprocess.run(['/bin/bash',script,'createKeys','-VERSION'],env=version_env,cwd=root,text=True,capture_output=True)
+        assert result.returncode==0,(result.stdout,result.stderr)
+        assert 'certKeys version: '+version in result.stdout and expected in result.stdout
+        if expected=='Update available:':
+            assert '/releases/download/'+tag+'/certKeys' in result.stdout
+        assert not (home/'.ssh').exists(), 'Version flag must not execute another command'
+    for response, fail in [('{}','0'),('{"tag_name":"v1.2.3-rc1"}','0'),('not JSON','0'),('', '1')]:
+        version_env.update(MOCK_RELEASE=response,MOCK_CURL_FAIL=fail)
+        result=subprocess.run(['/bin/bash',script,'-version'],env=version_env,cwd=root,text=True,capture_output=True)
+        assert result.returncode==1 and 'Update check failed:' in result.stderr
+        assert 'certKeys version: '+version in result.stdout
+        assert 'No newer release available.' not in result.stdout
+    # Keep only the utilities needed to load the source script; curl is absent.
+    missing_bin=pathlib.Path(root)/'without curl';missing_bin.mkdir()
+    for utility in ('dirname','tr'):
+        missing_bin.joinpath(utility).symlink_to(shutil.which(utility))
+    result=subprocess.run(['/bin/bash',script,'-version'],env=dict(env,PATH=str(missing_bin)),cwd=root,text=True,capture_output=True)
+    assert result.returncode==1 and 'curl is required' in result.stderr
+    assert 'certKeys version: '+version in result.stdout
     def run(*args):
         p=subprocess.run(['/bin/bash',script,*args],env=env,cwd=root,input='n\n',text=True,capture_output=True)
         assert p.returncode==0,(args,p.stdout,p.stderr)
         assert not p.stderr or args[0] == "createKeys",(args,p.stderr)
         return p.stdout
     run('help','-TRACE')
+    assert 'No private keys found.' in run('list')
+    assert not (home/'.ssh').exists(), 'Listing must not create the SSH directory'
+    ssh_dir=home/'.ssh';ssh_dir.mkdir(mode=0o700)
+    assert 'No private keys found.' in run('list')
+    fixtures={
+        'custom key': '-----BEGIN OPENSSH PRIVATE KEY-----\nSECRET-LIST-TEST\n',
+        '.hidden-key': '-----BEGIN ENCRYPTED PRIVATE KEY-----\r\nSECRET-LIST-TEST\r\n',
+        'legacy-rsa': '-----BEGIN RSA PRIVATE KEY-----',
+        'ec-key': '-----BEGIN EC PRIVATE KEY-----\nSECRET-LIST-TEST\n',
+        'dsa-key': '-----BEGIN DSA PRIVATE KEY-----\nSECRET-LIST-TEST\n',
+        'pkcs8': '-----BEGIN PRIVATE KEY-----\nSECRET-LIST-TEST\n',
+        'id_fake.pub': 'ssh-rsa AAAA public key\n',
+        'config': 'Host example\n HostName example.com\n',
+    }
+    for name, content in fixtures.items():
+        (ssh_dir/name).write_bytes(content.encode())
+        (ssh_dir/name).chmod(0o600)
+    (ssh_dir/'subdirectory').mkdir()
+    (ssh_dir/'subdirectory/nested-key').write_text(fixtures['pkcs8'])
+    listing=run('LiSt','-context','ignored','-default')
+    for name in ('custom key','.hidden-key','legacy-rsa','ec-key','dsa-key','pkcs8'):
+        assert str(ssh_dir/name) in listing,(name,listing)
+    assert 'SECRET-LIST-TEST' not in listing
+    assert str(ssh_dir/'id_fake.pub') not in listing and str(ssh_dir/'config') not in listing
+    assert 'nested-key' not in listing
+    permission_key=ssh_dir/'custom key'
+    for mode, warning in [(0o400,False),(0o600,False),(0o644,True),(0o640,True),(0o700,True)]:
+        permission_key.chmod(mode)
+        checked=subprocess.run(['/bin/bash',script,'list'],env=env,cwd=root,text=True,capture_output=True)
+        assert checked.returncode==0 and str(permission_key) in checked.stdout
+        assert ('[W]' in checked.stderr)==warning,(mode,checked.stderr)
+        if warning: assert str(permission_key) in checked.stderr and 'chmod 600' in checked.stderr
+        assert permission_key.stat().st_mode & 0o777 == mode, 'List must not change permissions'
+        assert 'SECRET-LIST-TEST' not in checked.stdout+checked.stderr
+    permission_key.chmod(0o600)
+    # Force metadata failures and a foreign owner without privileged chown operations.
+    stat_bin=pathlib.Path(root)/'stat bin';stat_bin.mkdir()
+    stat=stat_bin/'stat'
+    stat_env=dict(env,PATH=str(stat_bin)+os.pathsep+env['PATH'])
+    for body, expected in [('exit 1','Cannot check private key permissions'),
+                           ("printf '%s\\n' '"+str(os.getuid()+1)+" 600'",'owner UID')]:
+        stat.write_text('#!/bin/sh\n'+body+'\n');stat.chmod(0o755)
+        checked=subprocess.run(['/bin/bash',script,'list'],env=stat_env,cwd=root,text=True,capture_output=True)
+        assert checked.returncode==0 and expected in checked.stderr,(checked.stdout,checked.stderr)
+    if sys.platform=='darwin':
+        subprocess.run(['chmod','+a','everyone allow read',str(permission_key)],check=True)
+        try:
+            checked=subprocess.run(['/bin/bash',script,'list'],env=env,cwd=root,text=True,capture_output=True)
+            assert checked.returncode==0 and 'additional ACL grants' in checked.stderr
+        finally:
+            subprocess.run(['chmod','-N',str(permission_key)],check=True)
+    for name in fixtures: (ssh_dir/name).unlink()
+    shutil.rmtree(ssh_dir/'subdirectory')
     run('createKeys','-DEFAULT','-keybits','1024')
     key=home/'.ssh/id_rsa'
     assert key.exists() and key.stat().st_mode & 0o777 == 0o600
@@ -19,6 +106,9 @@ with tempfile.TemporaryDirectory(prefix='certKeys test ') as root:
     run('createKeys','-context','linux-test','-keybits','2048')
     context_key=home/'.ssh/id@linux-test_rsa'
     assert context_key.exists()
+    listing=run('list')
+    assert str(key) in listing and str(context_key) in listing
+    assert str(key)+'.pub' not in listing and str(context_key)+'.pub' not in listing
     run('createPublicKeys','-context','linux-test')
     run('makeKeyAsDefault','-context','linux-test')
     assert key.read_bytes()==context_key.read_bytes()

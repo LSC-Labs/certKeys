@@ -6,6 +6,33 @@ permissions:
   contents: read
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make native OpenSSL available
+        run: |
+          $openssl = 'C:\Program Files\OpenSSL\bin'
+          if (Test-Path $openssl) { $openssl | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8 }
+      - name: Build release files
+        run: python scripts/build.py
+      - name: Test native Windows edition
+        run: |
+          & ./tests/test_windows.ps1
+          & ./tests/test_windows.ps1 -ScriptPath ./release/certKeys.ps1
+      - name: Test CMD launcher
+        run: |
+          python tests/test_windows_launcher.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_windows_launcher.py release/certKeys.bat
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   linux:
     runs-on: ubuntu-latest
     strategy:

@@ -20,14 +20,24 @@ jobs:
           apt-get install -y --no-install-recommends bash openssl openssh-client python3 ca-certificates git
       - uses: actions/checkout@v4
       - name: Check Bash syntax
-        run: bash -n certKeys LScriptLibV1.sh
+        run: bash -n src/certKeys src/LScriptLibV1.sh
       - name: Run compatibility tests
         run: python3 tests/test_compatibility.py
+      - name: Build and test standalone executable
+        run: |
+          python3 scripts/build.py
+          bash -n release/certKeys
+          python3 tests/test_compatibility.py release/certKeys
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check system Bash syntax
-        run: /bin/bash -n certKeys LScriptLibV1.sh
+        run: /bin/bash -n src/certKeys src/LScriptLibV1.sh
       - name: Run compatibility tests with system Bash
         run: python3 tests/test_compatibility.py
+      - name: Build and test standalone executable with system Bash
+        run: |
+          python3 scripts/build.py
+          /bin/bash -n release/certKeys
+          python3 tests/test_compatibility.py release/certKeys

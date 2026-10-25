@@ -1,5 +1,5 @@
-import os, pathlib, subprocess, tempfile
-script=str(pathlib.Path(__file__).resolve().parents[1] / 'certKeys')
+import os, pathlib, subprocess, sys, tempfile
+script=str(pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parents[1] / 'src' / 'certKeys')
 with tempfile.TemporaryDirectory(prefix='certKeys test ') as root:
     home=pathlib.Path(root)/'home with spaces';home.mkdir()
     env=dict(os.environ,HOME=str(home))

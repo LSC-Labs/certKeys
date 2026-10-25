@@ -21,28 +21,84 @@ On Debian/Ubuntu, install the runtime dependencies with:
 
 ```sh
 sudo apt-get update
-sudo apt-get install bash openssl openssh-client
+sudo apt-get install bash openssl openssh-client curl
 ```
 
 On macOS, no newer Bash installation or GNU sed is required. The required
 programs must be available through `PATH`.
 
-Keep `certKeys` and `LScriptLibV1.sh` in the same directory. From the project
-directory, start the program directly:
+## Installation from a release
+
+Download only the bundled `certKeys` file from the latest
+[GitHub Release](https://github.com/LSC-Labs/certKeys/releases/latest).
+A repository checkout, Python, and the separate library are not needed.
+The commands below require `curl` and assume that the release has an asset
+named exactly `certKeys`. The build artifact must first be attached to a
+published GitHub Release under that name.
+
+Install for the current user in `~/.local/bin`, without administrator rights:
+
+| Platform | Installation location | Shell configuration for `PATH` |
+| --- | --- | --- |
+| macOS (zsh) | `$HOME/.local/bin/certKeys` | `~/.zprofile` |
+| Debian/Ubuntu (Bash), including WSL | `$HOME/.local/bin/certKeys` inside Linux | `~/.profile` |
+| Windows with MSYS/Git Bash or Cygwin | `$HOME/.local/bin/certKeys` inside the Unix shell home directory | `~/.bash_profile` |
+
+Run these commands in Terminal on macOS or in the appropriate Unix shell on
+Linux/Windows. Under WSL, install inside the Linux distribution; under Git Bash,
+MSYS, or Cygwin, use that shell's home directory. Native PowerShell and Command
+Prompt cannot execute this Bash script directly.
 
 ```sh
-./certKeys help
+(
+    set -e
+    download_dir=$(mktemp -d)
+    trap 'rm -rf "$download_dir"' EXIT
+    curl --fail --location --show-error \
+        https://github.com/LSC-Labs/certKeys/releases/latest/download/certKeys \
+        --output "$download_dir/certKeys"
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 "$download_dir/certKeys" "$HOME/.local/bin/certKeys"
+)
 ```
 
-Alternatively, invoke Bash explicitly:
+Add the following line once to the shell configuration file listed above if
+`~/.local/bin` is not already on your `PATH`:
 
 ```sh
-bash certKeys help
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Both options also work from a zsh session. Run the script as a program rather
-than sourcing it into zsh. `sh certKeys` does not work because the program needs
-Bash syntax; Debian/Ubuntu, for example, uses dash for `/bin/sh`.
+Open a new login shell afterward, or run that `export` command in the current
+terminal, then check the installation:
+
+```sh
+command -v certKeys
+certKeys help
+```
+
+All examples below assume this installation. The command also works from zsh;
+execute it directly so its Bash shebang selects the interpreter. To update,
+repeat the download and installation commands; keys and configuration remain
+in `~/.ssh`.
+
+## Release build (development)
+
+Build a standalone executable with Python 3 (needed only for the build):
+
+```sh
+python3 scripts/build.py
+```
+
+The build embeds `src/LScriptLibV1.sh` into `src/certKeys`, writing the result to `release/certKeys`. Only this generated
+file needs to be distributed; the runtime programs listed above are still
+required. The generated `release/` directory is ignored by Git.
+
+The GitHub Actions workflow **Release build** runs on pushes, pull requests,
+and manual dispatch. It builds and tests the executable, then makes it available
+as the `certKeys-release` artifact for release publication. After downloading
+the artifact, run `chmod +x certKeys` if needed. The compatibility workflow also
+tests the bundled executable on Linux and macOS.
 
 ## Quick start
 
@@ -50,8 +106,8 @@ Create a key pair for the `work` context, transfer it to a server, and then
 connect using an SSH alias:
 
 ```sh
-./certKeys createKeys -context work -keybits 4096
-./certKeys storeKeyAt -context work -target alice@server.example.com -alias workserver
+certKeys createKeys -context work -keybits 4096
+certKeys storeKeyAt -context work -target alice@server.example.com -alias workserver
 ssh workserver
 ```
 
@@ -74,13 +130,13 @@ Parameters use a single hyphen. Supply each value as a separate argument;
 `-context=work` syntax is not supported. Put the command before its parameters:
 
 ```sh
-./certKeys createKeys -context work -algorithm rsa -keybits 4096
+certKeys createKeys -context work -algorithm rsa -keybits 4096
 ```
 
 Quote values containing spaces, such as an export directory:
 
 ```sh
-./certKeys getPublicSSHKey -context work -target "$HOME/Key Export"
+certKeys getPublicSSHKey -context work -target "$HOME/Key Export"
 ```
 
 Use simple context names and SSH aliases without spaces or path separators,
@@ -116,8 +172,8 @@ Available with `createKeys`, `createPublicKeys`, `getPublicSSHKey`,
 `makeKeyAsDefault`, `storeKeyAt`, and `createConfigEntry`.
 
 ```sh
-./certKeys createKeys -context project-a
-./certKeys getPublicSSHKey -context project-a -target /tmp
+certKeys createKeys -context project-a
+certKeys getPublicSSHKey -context project-a -target /tmp
 ```
 
 Always supply a name. A standalone `-context` does not select the computer name;
@@ -131,9 +187,9 @@ value, `-default` is equivalent to `1`; the option is disabled by default.
 `-default 0` restores context-based selection.
 
 ```sh
-./certKeys createKeys -default
-./certKeys createPublicKeys -default
-./certKeys storeKeyAt -default -target alice@server.example.com
+certKeys createKeys -default
+certKeys createPublicKeys -default
+certKeys storeKeyAt -default -target alice@server.example.com
 ```
 
 This option applies to the same six commands as `-context`. It does not copy an
@@ -147,7 +203,7 @@ the RSA option `rsa_keygen_bits` to OpenSSL. Other algorithms are therefore not
 generally supported at present.
 
 ```sh
-./certKeys createKeys -context work -algorithm rsa
+certKeys createKeys -context work -algorithm rsa
 ```
 
 This parameter applies to key selection commands in the same way as `-context`.
@@ -158,7 +214,7 @@ Sets the key length when generating a private RSA key. The default is `2048`.
 The value is passed to OpenSSL.
 
 ```sh
-./certKeys createKeys -context work -keybits 4096
+certKeys createKeys -context work -keybits 4096
 ```
 
 Applies to `createKeys`, and when `createPublicKeys` or `storeKeyAt` generates a
@@ -172,7 +228,7 @@ private key. Without a value, `-force` is equivalent to `1`; the option is
 disabled by default.
 
 ```sh
-./certKeys createKeys -context test -force -keybits 4096
+certKeys createKeys -context test -force -keybits 4096
 ```
 
 This generates a new key pair. Public keys already installed on servers are not
@@ -191,8 +247,8 @@ Its meaning depends on the command:
 | `removeConfigEntry` | Target from which to derive the alias to remove when `-alias` is omitted |
 
 ```sh
-./certKeys getPublicSSHKey -context work -target /tmp
-./certKeys createConfigEntry -context work -target alice@server.example.com
+certKeys getPublicSSHKey -context work -target /tmp
+certKeys createConfigEntry -context work -target alice@server.example.com
 ```
 
 An export directory must already exist. If the target is not an existing
@@ -209,7 +265,7 @@ Without `-alias`, the alias derived from `alice@server.example.com` is `server`.
 An IPv4 address is used in full as the alias.
 
 ```sh
-./certKeys createConfigEntry -context work -target alice@server.example.com -alias work-ssh
+certKeys createConfigEntry -context work -target alice@server.example.com -alias work-ssh
 ssh work-ssh
 ```
 
@@ -222,7 +278,7 @@ Enables additional diagnostic output on standard error. Without a value,
 `-trace` is equivalent to `1`; diagnostic output is disabled by default.
 
 ```sh
-./certKeys createConfigEntry -context work -target alice@server.example.com -trace
+certKeys createConfigEntry -context work -target alice@server.example.com -trace
 ```
 
 The boolean parameters `-default`, `-force`, and `-trace` accept, among other
@@ -233,8 +289,8 @@ values, `1`/`true` to enable them and `0`/`false` to disable them.
 ### `help` – Display help
 
 ```sh
-./certKeys help
-./certKeys
+certKeys help
+certKeys
 ```
 
 Displays the available commands and brief option descriptions.
@@ -244,8 +300,8 @@ running under Windows.
 ### `createKeys` – Create a key pair
 
 ```sh
-./certKeys createKeys -context work -keybits 4096
-./certKeys createKeys -default -keybits 4096
+certKeys createKeys -context work -keybits 4096
+certKeys createKeys -default -keybits 4096
 ```
 
 Generates a private RSA key and public keys in PEM and SSH formats. If `~/.ssh`
@@ -265,8 +321,8 @@ Parameters: `-context`, `-default`, `-algorithm`, `-keybits`, `-force`, `-trace`
 ### `createPublicKeys` – Regenerate public keys
 
 ```sh
-./certKeys createPublicKeys -context work
-./certKeys createPublicKeys -default
+certKeys createPublicKeys -context work
+certKeys createPublicKeys -default
 ```
 
 Derives the `.pub` and `.pub.pem` files again from the selected private key.
@@ -282,9 +338,9 @@ private key needs to be generated.
 ### `getPublicSSHKey` – Export a public SSH key
 
 ```sh
-./certKeys getPublicSSHKey -context work
-./certKeys getPublicSSHKey -context work -target /tmp
-./certKeys getPublicSSHKey -default -target /tmp/my-key.pub
+certKeys getPublicSSHKey -context work
+certKeys getPublicSSHKey -context work -target /tmp
+certKeys getPublicSSHKey -default -target /tmp/my-key.pub
 ```
 
 Copies only the public `.pub` file. Without `-target`, it is copied to the
@@ -300,7 +356,7 @@ Parameters: `-context`, `-default`, `-algorithm`, `-target`, `-trace`.
 ### `makeKeyAsDefault` – Use a context key as the default
 
 ```sh
-./certKeys makeKeyAsDefault -context work
+certKeys makeKeyAsDefault -context work
 ```
 
 Copies the selected private key and both public files to the default filenames:
@@ -316,7 +372,7 @@ Parameters: `-context`, `-default`, `-algorithm`, `-trace`.
 ### `storeKeyAt` – Transfer a public key to a server
 
 ```sh
-./certKeys storeKeyAt -context work -target alice@server.example.com -alias workserver
+certKeys storeKeyAt -context work -target alice@server.example.com -alias workserver
 ```
 
 Transfers the selected public SSH key to the target using `ssh-copy-id`.
@@ -338,7 +394,7 @@ Parameters: `-target`, `-context`, `-default`, `-algorithm`, `-alias`, `-trace`;
 ### `createConfigEntry` – Create or replace an SSH alias
 
 ```sh
-./certKeys createConfigEntry -context work -target alice@server.example.com -alias workserver
+certKeys createConfigEntry -context work -target alice@server.example.com -alias workserver
 ```
 
 Writes an entry to `~/.ssh/config`, for example:
@@ -362,8 +418,8 @@ Parameters: `-target`, `-alias`, `-context`, `-default`, `-algorithm`, `-trace`.
 ### `removeConfigEntry` – Remove an SSH alias
 
 ```sh
-./certKeys removeConfigEntry -alias workserver
-./certKeys removeConfigEntry -target alice@server.example.com
+certKeys removeConfigEntry -alias workserver
+certKeys removeConfigEntry -target alice@server.example.com
 ```
 
 Removes the `Host` block belonging to the alias from `~/.ssh/config`. In the
@@ -379,7 +435,7 @@ Parameters: `-alias` or `-target`, optionally `-trace`.
 ### `showConfig` – Display SSH configuration
 
 ```sh
-./certKeys showConfig
+certKeys showConfig
 ```
 
 Prints the entire `~/.ssh/config` file. There is no selection by context or
@@ -397,7 +453,7 @@ location:
 ```sh
 # WSL example: use the Windows profile as the working directory.
 cd /mnt/c/Users/MyName
-/path/to/certKeys syncKeysToWindows
+certKeys syncKeysToWindows
 ```
 
 Copies all regular files whose names start with `id` from `$HOME/.ssh` to
@@ -421,7 +477,7 @@ directory and invocation follow the same pattern as the previous command:
 
 ```sh
 cd /mnt/c/Users/MyName
-/path/to/certKeys syncKeysFromWindows
+certKeys syncKeysFromWindows
 ```
 
 Copies all regular files whose names start with `id` from `./.ssh` to

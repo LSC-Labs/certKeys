@@ -21,29 +21,88 @@ Unter Debian/Ubuntu lassen sich die Laufzeitabhängigkeiten so installieren:
 
 ```sh
 sudo apt-get update
-sudo apt-get install bash openssl openssh-client
+sudo apt-get install bash openssl openssh-client curl
 ```
 
 Unter macOS ist keine neuere Bash und kein GNU sed erforderlich. Die benötigten
 Programme müssen über `PATH` erreichbar sein.
 
-Die Dateien `certKeys` und `LScriptLibV1.sh` müssen im selben Verzeichnis liegen.
-Im Projektverzeichnis kann das Programm direkt gestartet werden:
+## Installation aus einem Release
+
+Nur die gebündelte Datei `certKeys` aus dem neuesten
+[GitHub-Release](https://github.com/LSC-Labs/certKeys/releases/latest)
+herunterladen. Ein Repository-Checkout, Python und die separate Bibliothek
+werden nicht benötigt. Die folgenden Befehle benötigen `curl` und setzen ein
+Release-Asset mit dem exakten Namen `certKeys` voraus. Das Build-Artefakt muss
+zuerst unter diesem Namen an ein veröffentlichtes GitHub-Release angehängt werden.
+
+Die Installation erfolgt für den aktuellen Benutzer unter `~/.local/bin`, ohne
+Administratorrechte:
+
+| Plattform | Installationsort | Shell-Konfiguration für `PATH` |
+| --- | --- | --- |
+| macOS (zsh) | `$HOME/.local/bin/certKeys` | `~/.zprofile` |
+| Debian/Ubuntu (Bash), einschließlich WSL | `$HOME/.local/bin/certKeys` innerhalb von Linux | `~/.profile` |
+| Windows mit MSYS/Git Bash oder Cygwin | `$HOME/.local/bin/certKeys` im Home-Verzeichnis der Unix-Shell | `~/.bash_profile` |
+
+Die folgenden Befehle unter macOS im Terminal und unter Linux/Windows in der
+jeweiligen Unix-Shell ausführen. Unter WSL innerhalb der Linux-Distribution
+installieren; unter Git Bash, MSYS oder Cygwin das Home-Verzeichnis dieser Shell
+verwenden. Native PowerShell und Eingabeaufforderung können das Bash-Skript
+nicht direkt ausführen.
 
 ```sh
-./certKeys help
+(
+    set -e
+    download_dir=$(mktemp -d)
+    trap 'rm -rf "$download_dir"' EXIT
+    curl --fail --location --show-error \
+        https://github.com/LSC-Labs/certKeys/releases/latest/download/certKeys \
+        --output "$download_dir/certKeys"
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 "$download_dir/certKeys" "$HOME/.local/bin/certKeys"
+)
 ```
 
-Alternativ ist ein expliziter Bash-Aufruf möglich:
+Falls `~/.local/bin` noch nicht im `PATH` enthalten ist, folgende Zeile einmalig
+in die oben angegebene Shell-Konfigurationsdatei eintragen:
 
 ```sh
-bash certKeys help
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Beide Varianten funktionieren auch aus einer zsh-Sitzung. Das Skript wird als
-Programm ausgeführt; es wird nicht in zsh eingebunden. `sh certKeys` funktioniert
-nicht, da beispielsweise Debian/Ubuntu für `/bin/sh` die Shell dash verwendet
-und das Programm Bash-Syntax benötigt.
+Anschließend eine neue Login-Shell öffnen oder den `export`-Befehl im aktuellen
+Terminal ausführen und die Installation prüfen:
+
+```sh
+command -v certKeys
+certKeys help
+```
+
+Alle folgenden Beispiele setzen diese Installation voraus. Der Aufruf funktioniert
+auch aus zsh; beim direkten Ausführen wählt die Bash-Shebang den Interpreter.
+Für ein Update die Download- und Installationsbefehle erneut ausführen; Schlüssel
+und Konfiguration bleiben unter `~/.ssh` erhalten.
+
+## Release-Build (Entwicklung)
+
+Mit Python 3 (nur für den Build benötigt) eine eigenständige Datei erstellen:
+
+```sh
+python3 scripts/build.py
+```
+
+Der Build bettet `src/LScriptLibV1.sh` in `src/certKeys` ein und schreibt das
+Ergebnis nach `release/certKeys`. Für die Weitergabe
+wird nur diese erzeugte Datei benötigt; die oben genannten Laufzeitprogramme
+bleiben erforderlich. Das erzeugte Verzeichnis `release/` wird von Git ignoriert.
+
+Der GitHub-Actions-Workflow **Release build** läuft bei Pushes, Pull Requests
+und manueller Ausführung. Er baut und testet die Datei und stellt sie anschließend
+als Artefakt `certKeys-release` für die Releaseveröffentlichung bereit. Nach dem
+Herunterladen des Artefakts gegebenenfalls `chmod +x certKeys` ausführen. Der
+Kompatibilitätsworkflow testet die gebündelte Datei zusätzlich unter Linux und
+macOS.
 
 ## Schnellstart
 
@@ -51,8 +110,8 @@ Ein eigenes Schlüsselpaar für den Kontext `arbeit` erstellen, auf einen Server
 übertragen und anschließend über einen SSH-Alias verwenden:
 
 ```sh
-./certKeys createKeys -context arbeit -keybits 4096
-./certKeys storeKeyAt -context arbeit -target alice@server.example.com -alias arbeitsserver
+certKeys createKeys -context arbeit -keybits 4096
+certKeys storeKeyAt -context arbeit -target alice@server.example.com -alias arbeitsserver
 ssh arbeitsserver
 ```
 
@@ -77,14 +136,14 @@ Argument; die Schreibweise `-context=arbeit` wird nicht unterstützt. Der Befehl
 sollte vor den Parametern stehen:
 
 ```sh
-./certKeys createKeys -context arbeit -algorithm rsa -keybits 4096
+certKeys createKeys -context arbeit -algorithm rsa -keybits 4096
 ```
 
 Werte mit Leerzeichen müssen in Anführungszeichen stehen, beispielsweise ein
 Exportverzeichnis:
 
 ```sh
-./certKeys getPublicSSHKey -context arbeit -target "$HOME/Key Export"
+certKeys getPublicSSHKey -context arbeit -target "$HOME/Key Export"
 ```
 
 Für Kontextnamen und SSH-Aliase einfache Namen ohne Leerzeichen oder
@@ -120,8 +179,8 @@ Verwendbar mit `createKeys`, `createPublicKeys`, `getPublicSSHKey`,
 `makeKeyAsDefault`, `storeKeyAt` und `createConfigEntry`.
 
 ```sh
-./certKeys createKeys -context projekt-a
-./certKeys getPublicSSHKey -context projekt-a -target /tmp
+certKeys createKeys -context projekt-a
+certKeys getPublicSSHKey -context projekt-a -target /tmp
 ```
 
 Immer einen Namen angeben. Ein alleinstehendes `-context` wählt keinen
@@ -136,9 +195,9 @@ Ohne Parameterwert entspricht `-default` dem Wert `1`; standardmäßig ist die
 Option ausgeschaltet. Mit `-default 0` wird wieder die Kontextauswahl verwendet.
 
 ```sh
-./certKeys createKeys -default
-./certKeys createPublicKeys -default
-./certKeys storeKeyAt -default -target alice@server.example.com
+certKeys createKeys -default
+certKeys createPublicKeys -default
+certKeys storeKeyAt -default -target alice@server.example.com
 ```
 
 Die Option ist bei denselben sechs Befehlen wie `-context` wirksam. Sie kopiert
@@ -152,7 +211,7 @@ Die Erzeugung übergibt an OpenSSL stets die RSA-Option `rsa_keygen_bits`.
 Andere Algorithmen sind deshalb derzeit nicht allgemein unterstützt.
 
 ```sh
-./certKeys createKeys -context arbeit -algorithm rsa
+certKeys createKeys -context arbeit -algorithm rsa
 ```
 
 Der Parameter wirkt bei den Befehlen zur Schlüsselauswahl wie `-context`.
@@ -163,7 +222,7 @@ Legt bei der Erzeugung eines privaten RSA-Schlüssels die Schlüssellänge fest.
 Standard ist `2048`. Der Wert wird an OpenSSL weitergereicht.
 
 ```sh
-./certKeys createKeys -context arbeit -keybits 4096
+certKeys createKeys -context arbeit -keybits 4096
 ```
 
 Wirksam bei `createKeys` sowie dann, wenn `createPublicKeys` oder `storeKeyAt`
@@ -177,7 +236,7 @@ privaten Schlüssels. Ohne Wert entspricht `-force` dem Wert `1`; standardmäßi
 ist die Option ausgeschaltet.
 
 ```sh
-./certKeys createKeys -context test -force -keybits 4096
+certKeys createKeys -context test -force -keybits 4096
 ```
 
 Dabei wird ein neues Schlüsselpaar erzeugt. Bereits auf Servern hinterlegte
@@ -197,8 +256,8 @@ Die Bedeutung hängt vom Befehl ab:
 | `removeConfigEntry` | Ziel, aus dem ohne `-alias` der zu entfernende Alias abgeleitet wird |
 
 ```sh
-./certKeys getPublicSSHKey -context arbeit -target /tmp
-./certKeys createConfigEntry -context arbeit -target alice@server.example.com
+certKeys getPublicSSHKey -context arbeit -target /tmp
+certKeys createConfigEntry -context arbeit -target alice@server.example.com
 ```
 
 Ein Exportverzeichnis muss bereits existieren. Ist das Ziel kein vorhandenes
@@ -215,7 +274,7 @@ Ohne `-alias` wird aus `alice@server.example.com` der Alias `server` abgeleitet.
 Eine IPv4-Adresse wird vollständig als Alias übernommen.
 
 ```sh
-./certKeys createConfigEntry -context arbeit -target alice@server.example.com -alias arbeit-ssh
+certKeys createConfigEntry -context arbeit -target alice@server.example.com -alias arbeit-ssh
 ssh arbeit-ssh
 ```
 
@@ -228,7 +287,7 @@ Aktiviert zusätzliche Diagnoseausgaben auf dem Standardfehlerkanal. Ohne Wert
 entspricht `-trace` dem Wert `1`; standardmäßig ist die Ausgabe deaktiviert.
 
 ```sh
-./certKeys createConfigEntry -context arbeit -target alice@server.example.com -trace
+certKeys createConfigEntry -context arbeit -target alice@server.example.com -trace
 ```
 
 Die booleschen Parameter `-default`, `-force` und `-trace` akzeptieren unter
@@ -239,8 +298,8 @@ anderem `1`/`true` zum Einschalten und `0`/`false` zum Ausschalten.
 ### `help` – Hilfe anzeigen
 
 ```sh
-./certKeys help
-./certKeys
+certKeys help
+certKeys
 ```
 
 Zeigt die verfügbaren Befehle und eine Kurzbeschreibung der Optionen.
@@ -250,8 +309,8 @@ Unix-Shells unter Windows.
 ### `createKeys` – Schlüsselpaar erstellen
 
 ```sh
-./certKeys createKeys -context arbeit -keybits 4096
-./certKeys createKeys -default -keybits 4096
+certKeys createKeys -context arbeit -keybits 4096
+certKeys createKeys -default -keybits 4096
 ```
 
 Erzeugt einen privaten RSA-Schlüssel sowie öffentliche Schlüssel im PEM- und
@@ -271,8 +330,8 @@ Parameter: `-context`, `-default`, `-algorithm`, `-keybits`, `-force`, `-trace`.
 ### `createPublicKeys` – Öffentliche Schlüssel erneut erzeugen
 
 ```sh
-./certKeys createPublicKeys -context arbeit
-./certKeys createPublicKeys -default
+certKeys createPublicKeys -context arbeit
+certKeys createPublicKeys -default
 ```
 
 Leitet die Dateien `.pub` und `.pub.pem` erneut aus dem ausgewählten privaten
@@ -289,9 +348,9 @@ notwendigen Neuerzeugung des privaten Schlüssels.
 ### `getPublicSSHKey` – Öffentlichen SSH-Schlüssel exportieren
 
 ```sh
-./certKeys getPublicSSHKey -context arbeit
-./certKeys getPublicSSHKey -context arbeit -target /tmp
-./certKeys getPublicSSHKey -default -target /tmp/mein-schluessel.pub
+certKeys getPublicSSHKey -context arbeit
+certKeys getPublicSSHKey -context arbeit -target /tmp
+certKeys getPublicSSHKey -default -target /tmp/mein-schluessel.pub
 ```
 
 Kopiert ausschließlich die öffentliche `.pub`-Datei. Ohne `-target` wird sie ins
@@ -308,7 +367,7 @@ Parameter: `-context`, `-default`, `-algorithm`, `-target`, `-trace`.
 ### `makeKeyAsDefault` – Kontextschlüssel als Standard übernehmen
 
 ```sh
-./certKeys makeKeyAsDefault -context arbeit
+certKeys makeKeyAsDefault -context arbeit
 ```
 
 Kopiert den ausgewählten privaten Schlüssel und beide öffentlichen Dateien auf
@@ -324,7 +383,7 @@ Parameter: `-context`, `-default`, `-algorithm`, `-trace`.
 ### `storeKeyAt` – Öffentlichen Schlüssel auf einen Server übertragen
 
 ```sh
-./certKeys storeKeyAt -context arbeit -target alice@server.example.com -alias arbeitsserver
+certKeys storeKeyAt -context arbeit -target alice@server.example.com -alias arbeitsserver
 ```
 
 Überträgt den ausgewählten öffentlichen SSH-Schlüssel mit `ssh-copy-id` an das
@@ -346,7 +405,7 @@ Parameter: `-target`, `-context`, `-default`, `-algorithm`, `-alias`, `-trace`;
 ### `createConfigEntry` – SSH-Alias anlegen oder ersetzen
 
 ```sh
-./certKeys createConfigEntry -context arbeit -target alice@server.example.com -alias arbeitsserver
+certKeys createConfigEntry -context arbeit -target alice@server.example.com -alias arbeitsserver
 ```
 
 Schreibt einen Eintrag in `~/.ssh/config`, beispielsweise:
@@ -372,8 +431,8 @@ Parameter: `-target`, `-alias`, `-context`, `-default`, `-algorithm`, `-trace`.
 ### `removeConfigEntry` – SSH-Alias entfernen
 
 ```sh
-./certKeys removeConfigEntry -alias arbeitsserver
-./certKeys removeConfigEntry -target alice@server.example.com
+certKeys removeConfigEntry -alias arbeitsserver
+certKeys removeConfigEntry -target alice@server.example.com
 ```
 
 Entfernt den zum Alias gehörenden `Host`-Block aus `~/.ssh/config`. Im zweiten
@@ -389,7 +448,7 @@ Parameter: `-alias` oder `-target`, optional `-trace`.
 ### `showConfig` – SSH-Konfiguration anzeigen
 
 ```sh
-./certKeys showConfig
+certKeys showConfig
 ```
 
 Gibt die gesamte Datei `~/.ssh/config` aus. Es gibt keine Auswahl nach Kontext
@@ -407,7 +466,7 @@ den eigenen Ablageort angepasst werden:
 ```sh
 # Beispiel für WSL: Das Windows-Profil ist das Arbeitsverzeichnis.
 cd /mnt/c/Users/MeinName
-/pfad/zu/certKeys syncKeysToWindows
+certKeys syncKeysToWindows
 ```
 
 Kopiert alle regulären Dateien mit dem Namensanfang `id` aus `$HOME/.ssh` nach
@@ -430,7 +489,7 @@ Aufruf entsprechen dem vorherigen Befehl:
 
 ```sh
 cd /mnt/c/Users/MeinName
-/pfad/zu/certKeys syncKeysFromWindows
+certKeys syncKeysFromWindows
 ```
 
 Kopiert alle regulären Dateien mit dem Namensanfang `id` aus `./.ssh` nach

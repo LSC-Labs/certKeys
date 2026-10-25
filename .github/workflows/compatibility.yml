@@ -1,0 +1,33 @@
+name: Shell compatibility
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04', 'ubuntu:24.04']
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bash openssl openssh-client python3 ca-certificates git
+      - uses: actions/checkout@v4
+      - name: Check Bash syntax
+        run: bash -n certKeys LScriptLibV1.sh
+      - name: Run compatibility tests
+        run: python3 tests/test_compatibility.py
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check system Bash syntax
+        run: /bin/bash -n certKeys LScriptLibV1.sh
+      - name: Run compatibility tests with system Bash
+        run: python3 tests/test_compatibility.py

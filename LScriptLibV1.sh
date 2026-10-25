@@ -3,6 +3,10 @@
 # (c) 1990-2024 LSC P.Liebl
 #
 
+# Bash 3.2 (macOS) compatible case conversion.
+toLower() { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'; }
+toUpper() { printf '%s' "$1" | LC_ALL=C tr '[:lower:]' '[:upper:]'; }
+
 # Read a single key from stdin (console)
 # First paramter is the message to be displayed like "OK ? [Y/n]"
 # Second parameter is the default key - if enter is pressed. In this sample "Y"
@@ -49,7 +53,7 @@ isTrueString() {
     if [ "$1" != "" ]; then
         # define only explicit the false values !!!
         # true values can be inside (for documentation)
-        case "${1:L}" in
+        case "$(toLower "$1")" in
             "true")  
                 true
                 ;;
@@ -92,7 +96,7 @@ isTrueString() {
 stringBefore() {
     local strText=$1
     local strToken=${2:-" "}
-    local strDefault=${3:-$1}
+    local strDefault=${3-$1}
     local strResult="${strText%$strToken*}"
     if [ "$strText" == "$strResult" ]; then strResult=$strDefault; fi
     echo $strResult
@@ -114,37 +118,42 @@ stringAfter() {
 }
 
 getArgumentSwitchValue() {
-    local strSwitch="${1@L}"
-    local strDefault=${2:-""}
-    local strValue="${tArgSwitches[$strSwitch]}"
-    echo "${strValue:-$strDefault}"
+    local strSwitch=$(toLower "$1")
+    local i
+    for (( i=0; i<${#tArgSwitchNames[@]}; i++ )); do
+        if [ "${tArgSwitchNames[$i]}" = "$strSwitch" ]; then
+            printf '%s\n' "${tArgSwitchValues[$i]}"
+            return
+        fi
+    done
+    printf '%s\n' "${2:-}"
 }
 
 setArgumentSwitchValue() {
-    local strSwitchName=${1@L}
-    local strSwitchValue=$2
-    tArgSwitches[${strSwitchName}]=$strSwitchValue
-    trace "Setting switch $strSwitchName to $strSwitchValue"
+    local strSwitchName=$(toLower "$1")
+    local i
+    for (( i=0; i<${#tArgSwitchNames[@]}; i++ )); do
+        if [ "${tArgSwitchNames[$i]}" = "$strSwitchName" ]; then
+            tArgSwitchValues[$i]=$2
+            return
+        fi
+    done
+    tArgSwitchNames+=("$strSwitchName")
+    tArgSwitchValues+=("$2")
 }
 
-# Set a commandline switch (to a default)
-# so call before
 setArgumentSwitchIfNotSet() {
-    local strSwitchName=$1
-    local strSwitchValue=$2
-    local strValue=$(getArgumentSwitchValue "$strSwitchName")
-    if [ -v $strValue ];
-    then
-        setArgumentSwitchValue "$strSwitchName" "$strSwitchValue"
+    local strValue=$(getArgumentSwitchValue "$1")
+    if [ -z "$strValue" ]; then
+        setArgumentSwitchValue "$1" "$2"
     fi
 }
 
 dumpKnownArgumentSwitches() {
     echo "Known argument switches are set to:"
-    echo "-----------------------------------"
-    for strKey in "${!tArgSwitches[@]}"
-    do
-        printf " - %-15s: %s\n" "$strKey" "${tArgSwitches[$strKey]}"
+    local i
+    for (( i=0; i<${#tArgSwitchNames[@]}; i++ )); do
+        printf ' - %-15s: %s\n' "${tArgSwitchNames[$i]}" "${tArgSwitchValues[$i]}"
     done
 }
 
@@ -164,7 +173,9 @@ dumpKnownUnnamedArguments() {
 # are splitted in more arguments.
 # tArgSwitches has to be global and stores all switches "-xxx" from the cmdline
 tCommandLineArguments=("$@")
-declare -A tArgSwitches
+tArgSwitchNames=()
+tArgSwitchValues=()
+tUnnamedArguments=()
 
 # Set the arguments from commandline
 # All arguments, that ar no switeches are stored inside the hashtable tUnnamedArguments.
